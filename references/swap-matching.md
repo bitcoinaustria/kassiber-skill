@@ -1,0 +1,232 @@
+# Swap matching
+
+When the user holds Bitcoin across Lightning, Liquid (LBTC), and on-chain
+BTC wallets and moves funds between them, Kassiber treats those moves as
+**swaps** — not as taxable disposals. The matcher pairs the two legs so
+the carrying-value math applies and the user sees only the actual fee as
+the real outflow.
+
+## When to reach for it
+
+- The user says "this Phoenix LN send and this Liquid receive are the same
+  swap" or anything similar (peg, submarine swap, Boltz, Aqua, federation).
+- The user has many LBTC↔BTC or LN↔Liquid pairs and wants to batch.
+- A "swap" tag or note appears on transactions but the report still shows
+  them as separate taxable disposals.
+- Reports surface "Neu gain" / "Income receipt" on legs that the user
+  insists were one swap.
+
+## Fast paths
+
+| User asks for... | First command |
+|---|---|
+| Find swap candidates | `kassiber --machine transfers suggest` |
+| Auto-pair all exact (payment_hash) matches | `kassiber --machine transfers bulk-pair --confidence exact` |
+| Pair two specific legs manually | `kassiber --machine transfers pair --tx-out <id> --tx-in <id> --kind submarine-swap --policy carrying-value` |
+| Record a direct swap payout to an external recipient | `kassiber --machine transfers payouts create --tx-out <id> --payout-asset BTC --payout-amount <btc> --payout-fiat-value <fiat> --policy carrying-value` |
+| Soft-delete a pair (audit row stays) | `kassiber --machine transfers unpair --pair-id <id>` |
+| Dismiss a false-positive candidate for 90 days | `kassiber --machine transfers dismiss --tx-out <id> --tx-in <id> --reason "not a swap"` |
+| Total swap fees by year | `kassiber --machine reports tax-summary` — read the rows with `row_type=swap_fees_year` / `swap_fees_total` |
+
+After every `transfers pair`, `transfers payouts create/delete`,
+`transfers bulk-pair`, `transfers unpair`, or `transfers dismiss`,
+re-run `kassiber --machine journals process` before trusting any report.
+
+## Confidence ladder
+
+`transfers suggest` emits `exact` and `strong` confidence bands; they
+have different review requirements.
+
+- **`exact`** — a deterministic link, safe to bulk-pair without per-row
+  review. Two methods produce it:
+  - `payment_hash` — both legs share a Lightning ``payment_hash``
+    (cryptographic identity across the swap).
+  - `htlc_refund` — the inbound leg is a failed-swap refund whose input
+    spends the outbound leg's on-chain HTLC funding output (see
+    [Failed swaps and refunds](#failed-swaps-and-refunds)). Unlike the
+    heuristic, this pairs **same-wallet** legs and ignores the time
+    window, because a refund returns to the funding wallet and lands
+    after the CLTV timeout. Default kind is `swap-refund`.
+- **`strong`** — different wallets, opposite directions, time delta
+  within the window (default 24h), and `|out_amount - in_amount|` sits
+  below the fee threshold (`max(1% of out, 2500 sats)`). Method is
+  `heuristic`. Always eyeball before pairing — the user has to confirm.
+
+`conflicts > 0` means two or more candidates share a leg. Each
+candidate carries `conflict_set_id` plus `conflict_size` — the
+cluster's cardinality stamped at match time over the FULL candidate
+set. Bulk-pair, rule auto-apply, and the review surfaces all gate on
+`conflict_size > 1`, so a cluster split across filters (for example the
+swap vs transfer tabs, or an `asset_pair` filter that hides one
+sibling) still blocks every member from bulk actions. Resolving a
+conflict is manual: pair the correct candidate from the row (pairing
+consumes its legs, so the losing siblings disappear on the next
+suggest) or dismiss the wrong ones.
+
+## What the matcher does NOT do
+
+- It never hardcodes Liquid federation addresses. Peg detection is
+  purely heuristic (asset + direction + amount + time window) plus the
+  exact-hash path for submarine swaps.
+- It does not surface deterministic same-asset self-transfers in the
+  review queue. Same `external_id` + same asset + one outbound/inbound
+  across owned wallets belongs to the journal self-transfer path instead.
+  Run `kassiber --machine journals transfers list` after processing to
+  audit those moves.
+- It never auto-pairs without explicit user opt-in (CLI flag,
+  consented daemon action, or rule the user created).
+- It never silently overrides the existing `transfers pair` validation
+  rules: cross-asset `policy=carrying-value` still requires an Austrian
+  profile; same-asset `policy=taxable` is still rejected.
+
+## Failed swaps and refunds
+
+A swap that fails (the Lightning payment can't be made, the invoice
+expires) is swept back on-chain through the HTLC's CLTV timeout branch.
+It shows up as two transactions with **different** txids: an outbound
+**lockup** to the swap HTLC, and a later inbound **refund** that returns
+the asset minus on-chain fees. Economically nothing was disposed of —
+the only cost is the miner fees. Left unpaired, the lockup books as a
+phantom SELL and the refund as a phantom BUY.
+
+Two pieces handle this:
+
+- **Pairing is allowed, even same-wallet.** The refund normally returns
+  to the funding wallet, so same-wallet same-asset pairs are accepted.
+  Pair the send and refund with `--kind swap-refund --policy carrying-value`
+  (any same-asset profile — this is a self-transfer, not a cross-asset
+  swap, so it does not need an Austrian profile). The round trip books as
+  a transfer that realizes only the fee delta; no disposal.
+
+  ```
+  kassiber transfers pair --tx-out <lockup-id> --tx-in <refund-id> \
+    --kind swap-refund --policy carrying-value
+  ```
+
+- **Automatic detection from chain data.** When BTC/Liquid descriptor
+  sync (esplora / electrum) sees an inbound tx whose input spends a
+  Boltz v1 HTLC via the refund (timeout) branch, it records the funding
+  txid it spent on `transactions.swap_refund_funding_txid`. The matcher
+  pairs that refund to the outbound leg whose `external_id` is that txid
+  and surfaces it as an **exact** `swap-refund` candidate (method
+  `htlc_refund`) — same-wallet and outside the time window included.
+  Filter to just these with `transfers suggest --method htlc_refund`.
+
+  Surfacing only — like every exact candidate it auto-pairs only via an
+  explicit `transfers bulk-pair`, a rule, or a user action.
+
+Coverage limits: the link needs on-chain witness data, so it covers
+chain-synced Boltz v1 P2WSH HTLC refunds. CSV/exchange imports and Boltz
+v2 Taproot cooperative refunds carry no witness, and rows synced before
+the `swap_refund_funding_txid` column existed are not backfilled — those
+fall back to the heuristic (different-wallet refunds inside the window)
+or to manual `swap-refund` pairing.
+
+## Direct swap payouts
+
+Use `transfers payouts create` when there is no owned inbound leg because
+the swap provider paid a recipient or exchange directly. This records the
+reviewed source outbound, target asset amount, external payout id,
+counterparty, fiat payout value, policy, and swap-fee delta without
+creating a fake recipient wallet.
+
+The direct payout review model is not Austrian-only: when
+`payout_fiat_value` is present, it becomes the reviewed proceeds for the
+taxable source-row disposal. That lets privacy-preserving provider payout
+flows preserve the actual sale value even when no owned inbound leg exists.
+
+For Austrian cross-asset `policy=carrying-value`, journal processing
+synthesizes an in-memory target-asset acquisition plus immediate external
+disposal. The source swap leg becomes `neu_swap` / zero gain, the target
+payout remains a taxable disposal, and persisted journal entries still
+point at the real source transaction id. For non-AT cross-asset books,
+use `--policy taxable`; generic carrying-value remains unsupported.
+
+## Swap fees as the real outflow
+
+Carrying-value swaps preserve principal — the only thing that leaves
+the user's custody is the fee delta between the two legs. The matcher
+computes that delta once at pair time and persists it on
+`transaction_pairs.swap_fee_msat`; direct payout reviews persist the
+same delta on `direct_swap_payouts.swap_fee_msat`. Surfacing this
+number is the "what actually left your custody" framing the user
+typically wants.
+
+- `kassiber --machine transfers suggest` exposes `swap_fee_msat` and
+  `swap_fee` (BTC float) on every candidate.
+- `kassiber --machine transfers list` shows the persisted fee on every
+  active pair.
+- `kassiber --machine reports tax-summary` aggregates per-year and
+  grand total into rows with `row_type=swap_fees_year` and
+  `row_type=swap_fees_total`.
+
+A negative `swap_fee_msat` is an anomaly (the inbound exceeded the
+outbound). The matcher rejects those candidates in the strong heuristic
+band; if you see one persisted, the pair was created manually with the
+wrong legs — unpair and re-pair.
+
+## Auto-pair rules
+
+When the same swap shape repeats, the user can promote it to a rule:
+
+```
+kassiber transfers rules create \
+  --name "Phoenix to Liquid" \
+  --predicate '{"out_wallet_kind":"phoenix","in_wallet_kind":"descriptor",
+                "in_asset":"LBTC","max_fee_pct":0.01,
+                "min_confidence":"strong"}' \
+  --kind submarine-swap \
+  --policy carrying-value
+```
+
+Rules auto-apply to solo (non-conflicted) candidates that match every
+non-empty predicate field. Conflict clusters are never auto-paired —
+the user always disambiguates. Apply with `transfers rules apply`;
+list with `transfers rules list`;
+toggle with `transfers rules enable|disable --rule-id <id>`; delete
+with `transfers rules delete --rule-id <id>`.
+
+## Saved review-queue filters
+
+`views {list,create,delete}` persists filter snapshots scoped to a
+surface (the matcher uses `swap_candidates`). The UI renders these as
+header chips so heavy users can switch between "Boltz pegouts" and
+"Phoenix LN→Liquid awaiting review" with one click.
+
+## Boundary with the tax engine
+
+- Kassiber owns: pair detection, confidence scoring, conflict clusters,
+  fee computation, dismissal lifecycle, rule application.
+- rp2 owns: same-asset MOVE (`IntraTransaction`), AT cross-asset
+  carrying-value math (via `compute_tax_for_assets` on the AT plugin),
+  disposal category bucketing.
+- For non-AT profiles, cross-asset carrying-value is still unsupported
+  in rp2 — those pairs surface in `cross_asset_pairs` audit but fall
+  through to SELL+BUY in the journal. `transfers pair` rejects
+  `policy=carrying-value` on non-AT cross-asset pairs with a clear
+  validation envelope.
+
+## HTLC payment-hash extraction
+
+Where the matcher's exact-match path applies:
+
+- **Phoenix CSV imports** — every Lightning row already exposes
+  `payment_hash` in the source. The importer promotes it to
+  `transactions.payment_hash` so the matcher can use it directly.
+- **BTC + Liquid descriptor sync (esplora / electrum)** — the parser
+  opportunistically extracts a preimage from claim-tx witnesses and
+  records the resulting `payment_hash` with
+  `payment_hash_source = "chain_script"`. Boltz v1 P2WSH HTLCs are
+  covered (both submarine and reverse variants).
+- **Boltz v2 Taproot cooperative spends** reveal nothing on-chain
+  (key-path Schnorr signature only), so those swaps fall through to
+  the heuristic match by physics, not by deferral.
+- **Failed-swap refunds** take the HTLC timeout branch and reveal no
+  preimage, so there is no `payment_hash`. Sync instead records the
+  funding txid the refund spent on `transactions.swap_refund_funding_txid`,
+  feeding the `htlc_refund` exact path (see
+  [Failed swaps and refunds](#failed-swaps-and-refunds)).
+
+The exact-match path is also future-proofed for `coreln`, `lnd`, and
+`nwc` adapters once they sync — they all expose `payment_hash` on
+Lightning rows, and the importer normaliser already accepts the field.
