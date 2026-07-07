@@ -328,10 +328,10 @@ match the book currency; gift/donation/lost/stolen rows are quarantined for
 review. The full column and Type reference lives in
 `docs/reference/imports.md#generic-ledger-import` in the Kassiber source repo.
 
-Adding a provider Kassiber does not support yet (a dedicated `import-<slug>`
-instead of generic CSV) is a separate workflow: see
-[add-exchange.md](add-exchange.md) for the intake interview and importer
-implementation checklist.
+Adding a provider Kassiber does not support yet is outside this CLI-navigation
+skill. For one-off imports, reshape the export into the generic ledger columns
+and use `wallets import-ledger`; for a dedicated importer, work from the
+Kassiber source repo docs and code review process.
 
 Do not create a second wallet for a BTCPay or Phoenix export when it belongs to a wallet already tracked in Kassiber.
 Do not create one Kassiber wallet per BTCPay store if multiple stores share the same underlying wallet balance.

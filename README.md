@@ -1,28 +1,29 @@
-# Kassiber Agent Skill
+# Kassiber Skill
 
-Agent Skill for using Kassiber from AI coding agents and terminal assistants.
+Agent Skill for helping AI coding agents and terminal assistants use the
+Kassiber CLI correctly.
 
-This repository is intentionally small and installable on its own. The skill
-teaches agents Kassiber's CLI workflow order, safe handling rules, and the
-places where command syntax is easy to guess wrong.
+This repository is intentionally small and installable on its own. It focuses
+on CLI navigation: workflow order, safe handling rules, report selection, and
+the places where command syntax is easy to guess wrong.
 
 ## Contents
 
 - `SKILL.md` - top-level routing, rules, fast paths, and gotchas
-- `references/` - focused command and workflow references
+- `references/` - focused CLI command and workflow references
 - `scripts/` - small helpers used by the skill
 - `agents/` - agent-specific metadata
 
 ## Install
 
 ```bash
-npx skills add bitcoinaustria/skills
+npx skills add bitcoinaustria/kassiber-skill
 ```
 
 Manual install:
 
 ```bash
-git clone https://github.com/bitcoinaustria/skills.git kassiber-skill
+git clone https://github.com/bitcoinaustria/kassiber-skill.git kassiber-skill
 cp -R kassiber-skill ~/.agents/skills/kassiber
 ```
 
