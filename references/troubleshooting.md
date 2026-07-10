@@ -140,6 +140,9 @@ If a command returns:
 - `remembered_unlock_unavailable` — the native credential store is missing,
   locked, or rejected the write. Keep using `--db-passphrase-fd`; Kassiber does
   not create a plaintext fallback.
+- Desktop Touch ID reports a stale enrollment after a CLI passphrase rotation —
+  enter the new database passphrase manually and re-enable Touch ID. The CLI
+  intentionally cannot rewrite the biometric-protected desktop item.
 - `plaintext_database` from `kassiber secrets change-passphrase` — the file is
   still plaintext. Run `kassiber secrets init` first.
 - `already_encrypted` from `kassiber secrets init` — the file is already

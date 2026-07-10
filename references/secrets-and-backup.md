@@ -38,10 +38,10 @@ Behavior to remember:
 - The plaintext code path is preserved: when the on-disk file looks like a
   vanilla SQLite database, no passphrase is asked for and the legacy behavior
   is unchanged.
-- Remembered unlock is opt-in and stores a convenience copy in macOS Keychain,
+- CLI remembered unlock is opt-in and stores a CLI-only convenience copy in macOS Keychain,
   Windows Credential Manager, or available/unlocked Linux Secret Service. It is
-  not recovery: the passphrase remains the perimeter and losing it means data
-  loss.
+  separate from desktop Touch ID enrollment and is not recovery: the passphrase
+  remains the perimeter and losing it means data loss.
 
 ## Remembered CLI unlock
 
@@ -53,9 +53,10 @@ kassiber secrets forget-unlock
 ```
 
 Enrollment verifies the encrypted database before storing anything. The CLI
-uses the item only after setting `cli_remembered_unlock: true` in managed
-`config/settings.json`; desktop-only Touch ID enrollment leaves the marker
-unset, and `secrets status` does not read that desktop-only item. Kassiber
+uses its `Kassiber CLI Database Passphrase` item only after setting
+`cli_remembered_unlock: true` in managed `config/settings.json`; desktop-only
+Touch ID enrollment leaves the marker unset, and `secrets status` does not read
+the desktop item. Kassiber
 accepts only the native keyring backend for macOS, Windows, or Linux Secret
 Service; configured third-party/file backends are treated as unavailable. CLI
 reads are not biometric-gated. If the stored copy is stale, Kassiber
@@ -69,6 +70,25 @@ their documented fd/identity/recipient input and return `interaction_required`
 instead of opening a prompt. The one-shot `chat` bootstrap sends a resolved DB
 passphrase only in a private `daemon.unlock` request over the child stdin pipe;
 it never appears in argv, environment variables, stdout, or `--transcript`.
+
+On upgrades from the former shared `Kassiber Database Passphrase` item, the
+non-secret CLI marker decides ownership conservatively. An enabled CLI claims
+and migrates that legacy item into the CLI namespace; otherwise the desktop
+owns the migration path. The legacy item is migration input only.
+
+## Desktop Touch ID boundary
+
+Desktop Touch ID uses a separate per-data-root
+`Kassiber Desktop Biometric Passphrase` item. Production-entitled macOS builds
+protect it with item-level `biometryCurrentSet`, so a fingerprint-enrollment
+change invalidates the item. Unsigned/ad-hoc previews cannot use that entitlement
+and instead perform an explicit LocalAuthentication check before reading their
+desktop-only item.
+
+Desktop Settings can forget only Touch ID. `kassiber secrets forget-unlock`
+forgets only the CLI copy. The desktop **Forget all unlock methods** action
+removes both current items plus the migration-only legacy item. None of these
+actions changes the SQLCipher passphrase or provides recovery.
 
 ## First-time encryption
 
@@ -112,8 +132,11 @@ kassiber secrets change-passphrase --db-passphrase-fd 3 --new-passphrase-fd 4 \
 
 Rotation runs `PRAGMA rekey` and then re-opens the file with the new
 passphrase to verify. The old passphrase will not unlock the file after this
-returns successfully. Any enrolled OS-store copy is updated; if that update is
-rejected, Kassiber disables CLI remembered unlock and warns on stderr.
+returns successfully. A desktop-initiated rotation refreshes both enrolled
+copies. A CLI-initiated rotation refreshes the CLI copy and invalidates desktop
+Touch ID until the user manually enters the new passphrase and re-enrolls it.
+If the CLI copy cannot be updated, Kassiber disables CLI remembered unlock and
+warns on stderr rather than leaving a known-stale credential active.
 
 ## What stays plaintext on disk
 
