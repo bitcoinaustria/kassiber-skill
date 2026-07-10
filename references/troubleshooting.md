@@ -140,6 +140,10 @@ If a command returns:
 - `remembered_unlock_unavailable` — the native credential store is missing,
   locked, or rejected the write. Keep using `--db-passphrase-fd`; Kassiber does
   not create a plaintext fallback.
+- `remembered_unlock_legacy_cleanup_failed` — enrollment could not remove the
+  migration-only shared credential and rolled back a new CLI enrollment when
+  possible. Remove `Kassiber Database Passphrase` in the OS credential manager
+  and retry.
 - Desktop Touch ID reports a stale enrollment after a CLI passphrase rotation —
   enter the new database passphrase manually and re-enable Touch ID. The CLI
   intentionally cannot rewrite the biometric-protected desktop item.

@@ -12,6 +12,8 @@ data='{}'
 issues='[]'
 attention='[]'
 status_json=""
+command_stdout=""
+command_stderr=""
 
 if ! command -v jq >/dev/null 2>&1; then
   printf '%s\n' '{"kind":"error","schema_version":1,"error":{"code":"missing_dependency","message":"jq is required for verify-state.sh","hint":"Install jq and rerun the helper.","details":{"dependency":"jq"},"retryable":false,"debug":null}}'
@@ -85,12 +87,12 @@ detect_runner() {
     fi
   fi
   if command -v uv >/dev/null 2>&1 && [[ -n "$REPO_ROOT" && -f "$REPO_ROOT/pyproject.toml" ]]; then
-    if (cd "$REPO_ROOT" && uv run kassiber status >/dev/null 2>&1); then
+    if (cd "$REPO_ROOT" && uv run kassiber --help >/dev/null 2>&1); then
       RUNNER=(uv run kassiber)
       RUNNER_MODE="uv"
       return 0
     fi
-    if (cd "$REPO_ROOT" && uv run python -m kassiber status >/dev/null 2>&1); then
+    if (cd "$REPO_ROOT" && uv run python -m kassiber --help >/dev/null 2>&1); then
       RUNNER=(uv run python -m kassiber)
       RUNNER_MODE="uv-python"
       return 0
@@ -111,6 +113,19 @@ run_kassiber() {
   (cd "$REPO_ROOT" && "${RUNNER[@]}" "$@")
 }
 
+run_kassiber_captured() {
+  local stderr_file returncode
+  stderr_file="$(mktemp "${TMPDIR:-/tmp}/kassiber-skill-stderr.XXXXXX")"
+  if command_stdout=$(run_kassiber "$@" 2>"$stderr_file"); then
+    returncode=0
+  else
+    returncode=$?
+  fi
+  command_stderr="$(<"$stderr_file")"
+  rm -f "$stderr_file"
+  return "$returncode"
+}
+
 add_issue() {
   local issue="$1"
   issues=$(jq --arg issue "$issue" '. + [$issue]' <<<"$issues")
@@ -121,15 +136,63 @@ add_attention() {
   attention=$(jq --arg item "$item" '. + [$item]' <<<"$attention")
 }
 
-run_status() {
-  local output
-  if output=$(run_kassiber --machine status 2>&1); then
-    status_json="$output"
+run_unlock_preflight() {
+  local output encrypted available configured cli_enabled details
+  if ! run_kassiber_captured --machine secrets status; then
+    emit_error \
+      "verify_state_secrets_status_failed" \
+      "Unable to inspect the Kassiber unlock state." \
+      "Run \`kassiber --machine secrets status\` locally and fix the reported credential-store error." \
+      "$(jq -n --arg stdout "$command_stdout" --arg stderr "$command_stderr" '{stdout: $stdout, stderr: $stderr}')"
+    return 1
+  fi
+  output="$command_stdout"
+  if ! jq -e '.kind == "secrets.status" and (.data | type == "object")' >/dev/null 2>&1 <<<"$output"; then
+    emit_error \
+      "verify_state_secrets_status_invalid" \
+      "Kassiber returned an invalid secrets-status envelope." \
+      "Run \`kassiber --machine secrets status\` and inspect the local installation." \
+      "$(jq -n --arg stdout "$output" --arg stderr "$command_stderr" '{stdout: $stdout, stderr: $stderr}')"
+    return 1
+  fi
+
+  encrypted=$(jq -r '.data.encrypted // false' <<<"$output")
+  [[ "$encrypted" == "true" ]] || return 0
+  available=$(jq -r '.data.remembered_unlock.available // false' <<<"$output")
+  configured=$(jq -r '.data.remembered_unlock.configured // false' <<<"$output")
+  cli_enabled=$(jq -r '.data.remembered_unlock.cli_enabled // false' <<<"$output")
+  if [[ "$available" == "true" && "$configured" == "true" && "$cli_enabled" == "true" ]]; then
     return 0
   fi
-  if jq -e . >/dev/null 2>&1 <<<"$output"; then
-    if [[ "$(jq -r '.kind // ""' <<<"$output")" == "error" ]]; then
-      printf '%s\n' "$output"
+
+  details=$(jq '{remembered_unlock: .data.remembered_unlock, database: .data.path}' <<<"$output")
+  emit_error \
+    "remembered_unlock_required" \
+    "The encrypted Kassiber database is not ready for prompt-free agent access." \
+    "A human should run \`kassiber secrets remember-unlock\` in a local interactive terminal, then rerun this helper. The agent must never receive the passphrase." \
+    "$details"
+  return 1
+}
+
+run_status() {
+  local code details
+  if run_kassiber_captured --machine status; then
+    status_json="$command_stdout"
+    return 0
+  fi
+  if jq -e . >/dev/null 2>&1 <<<"$command_stdout"; then
+    if [[ "$(jq -r '.kind // ""' <<<"$command_stdout")" == "error" ]]; then
+      code=$(jq -r '.error.code // ""' <<<"$command_stdout")
+      if [[ "$code" == "passphrase_required" && "$command_stderr" == *"remembered_unlock_stale"* ]]; then
+        details=$(jq -n --arg stderr "$command_stderr" '{stderr: $stderr}')
+        emit_error \
+          "remembered_unlock_stale" \
+          "The enrolled CLI credential no longer unlocks this database." \
+          "A human should run \`kassiber secrets remember-unlock\` locally to replace it, then rerun this helper." \
+          "$details"
+        return 1
+      fi
+      printf '%s\n' "$command_stdout"
       return 1
     fi
   fi
@@ -137,7 +200,7 @@ run_status() {
     "verify_state_status_failed" \
     "Unable to collect Kassiber status." \
     "Ensure Kassiber is installed or run this helper from a Kassiber repo checkout with uv available." \
-    "$(jq -n --arg stderr "$output" --arg repo_root "$REPO_ROOT" '{stderr: $stderr, repo_root: $repo_root}')"
+    "$(jq -n --arg stdout "$command_stdout" --arg stderr "$command_stderr" --arg repo_root "$REPO_ROOT" '{stdout: $stdout, stderr: $stderr, repo_root: $repo_root}')"
   return 1
 }
 
@@ -216,6 +279,10 @@ check_quarantine() {
     add_attention "quarantine"
   fi
 }
+
+if ! run_unlock_preflight; then
+  exit 1
+fi
 
 if ! run_status; then
   exit 1

@@ -82,9 +82,11 @@ passphrase only in a private `daemon.unlock` request over the child stdin pipe;
 it never appears in argv, environment variables, stdout, or `--transcript`.
 
 On upgrades from the former shared `Kassiber Database Passphrase` item, the
-non-secret CLI marker decides ownership conservatively. An enabled CLI claims
-and migrates that legacy item into the CLI namespace; otherwise the desktop
-owns the migration path. The legacy item is migration input only.
+non-secret CLI marker decides ownership conservatively. Successful explicit CLI
+enrollment removes the legacy item after writing the CLI-only item and marker;
+if cleanup fails, Kassiber rolls the new enrollment back when possible and
+returns `remembered_unlock_legacy_cleanup_failed`. Otherwise the desktop owns
+the migration path. The legacy item is migration input only.
 
 ## Desktop Touch ID boundary
 
@@ -99,6 +101,9 @@ Desktop Settings can forget only Touch ID. `kassiber secrets forget-unlock`
 forgets only the CLI copy. The desktop **Forget all unlock methods** action
 removes both current items plus the migration-only legacy item. None of these
 actions changes the SQLCipher passphrase or provides recovery.
+An unsigned/ad-hoc preview refuses to replace an existing protected enrollment,
+and protected-item removal cleans any preview fallback first rather than
+silently leaving another valid desktop copy.
 
 ## First-time encryption
 

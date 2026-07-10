@@ -31,13 +31,20 @@ Requirements:
 
 It checks:
 
+- encrypted-database readiness before any DB-opening command; when CLI
+  remembered unlock is not enrolled, it returns `remembered_unlock_required`
+  with a deterministic instruction for a human to enroll locally
 - runtime and path resolution
 - current books set / book (`workspace` and `profile` in CLI output)
 - wallet count
 - journal entry count
 - quarantine count
 
-The helper emits a machine-readable envelope with a `summary` section. Hard failures land in `summary.issues`; softer prompts like zero wallets on a fresh install or non-zero quarantine land in `summary.attention`.
+The helper never prompts for a database passphrase and keeps command stderr
+separate from JSON parsing. It emits a machine-readable envelope with a
+`summary` section. Hard failures land in `summary.issues`; softer prompts like
+zero wallets on a fresh install or non-zero quarantine land in
+`summary.attention`.
 
 ## Useful smoke commands
 
