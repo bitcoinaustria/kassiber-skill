@@ -63,7 +63,17 @@ reads are not biometric-gated. If the stored copy is stale, Kassiber
 writes `remembered_unlock_stale` to stderr and falls through to the existing
 prompt or `passphrase_required` behavior. Headless systems should keep using
 `--db-passphrase-fd`. `kassiber secrets status` reports `platform`, `available`,
-`configured`, and `cli_enabled` under `remembered_unlock`.
+`configured`, `cli_enabled`, and a stable `access_policy` under
+`remembered_unlock`. Interpret `access_policy` as the credential-store boundary,
+not as proof that a biometric prompt occurred:
+
+- `macos_keychain_application_acl` — macOS Keychain access constrained to the
+  Kassiber application identity.
+- `windows_dpapi_user_scope` — Windows Credential Manager / DPAPI protection for
+  the signed-in Windows user.
+- `linux_secret_service_session` — the active desktop Secret Service collection
+  and session policy.
+- `unsupported` — no supported native remembered-unlock backend is available.
 
 `--machine` implies `--non-interactive`, so passphrase-requiring commands need
 their documented fd/identity/recipient input and return `interaction_required`
