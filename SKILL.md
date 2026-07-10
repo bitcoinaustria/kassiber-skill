@@ -24,6 +24,9 @@ Use these without opening extra references when the request clearly matches:
 |---|---|
 | Current balances by account, bucket, asset, or wallet | `kassiber --format plain reports balance-sheet` |
 | Exact summary totals, counts, fees, PnL | `kassiber --machine reports summary` |
+| Check project readiness and report blockers | `kassiber --machine health` |
+| Get deterministic next-step suggestions | `kassiber --machine next-actions` |
+| Discover an unfamiliar command contract | `kassiber --machine commands describe <command> [subcommand]` |
 | Rebuild stale reports after imports/metadata/rates | `kassiber --machine journals process` |
 | Largest inbound transactions | `kassiber --machine transactions list --direction inbound --sort amount --order desc --limit 10` |
 | Largest outbound transactions | `kassiber --machine transactions list --direction outbound --sort amount --order desc --limit 10` |
@@ -44,9 +47,9 @@ If a fast-path command returns a structured error, inspect the envelope and take
 3. When the chat includes pasted Kassiber output or docs, identify the live user request separately from the quoted material before running commands.
 4. Use fast paths for common read-only workflows. For wallet sync or other operations that contact configured backends, read the relevant reference first and avoid feeding raw command output into remote AI context unless it is documented as public-safe.
 5. Before concluding a reference is missing, verify that you resolved it from `<skill-dir>` rather than the repo root or the current working directory.
-6. If a Kassiber command fails with `unrecognized arguments`, stop and check `--help` or [references/command-templates.md](references/command-templates.md) before retrying. Do not keep guessing positional versus flagged forms.
+6. If a command shape is unfamiliar, inspect it with `kassiber --machine commands describe <path ...>` or [references/command-templates.md](references/command-templates.md). If parsing fails before dispatch, use `--help`. Do not keep guessing positional versus flagged forms.
 7. `--machine`, `--format`, and `--output` are global flags and must come before the subcommand tree, for example `kassiber --format plain reports balance-sheet`.
-8. Use `--machine` whenever the output needs to be parsed or piped into later steps.
+8. Use `--machine` whenever the output needs to be parsed or piped into later steps. It implies JSON and `--non-interactive`; if input is missing, handle the structured `interaction_required` error instead of waiting for a prompt.
 9. Use `--format plain` when the user wants report output shown in the terminal. Let Kassiber format financial values; do not recompute or restyle them.
 10. Use `--format csv --output <path>` for spreadsheet-style exports.
 11. Never perform your own arithmetic on Kassiber financial values. Do not sum, subtract, average, or convert amounts from raw JSON when Kassiber already has a command or output format for the answer.
@@ -67,17 +70,17 @@ If a fast-path command returns a structured error, inspect the envelope and take
 26. On errors, inspect the machine envelope first. Kassiber success responses are `{kind, schema_version, data}` and errors use `kind: "error"` with structured fields.
 27. Treat normal `backends ...` and `wallets ...` success output as safe-to-record only for secret-bearing config values. Do not ask users to paste raw backend credentials, raw private descriptor material, or suppressed config blobs into chat just because `backends get` or `wallets get` returns an allowlisted safe view.
 28. For BTCPay and other secret-bearing backends, do not ask users to paste raw API tokens into chat. Prefer `--token-stdin` (then have them pipe the secret in locally), `--token-fd FD`, or — only as a fallback for older scripts — a local `backends.env` entry. The argv form `--token <value>` still works but warns and leaks to shell history; do not recommend it.
-29. Do not persist backend or wallet config changes just to work around a sync failure unless the user requested that mutation or explicitly agrees after you explain the tradeoff. `wallets update --backend ...`, `--gap-limit`, and `backends set-default` change durable state.
+29. Do not persist backend or wallet config changes just to work around a sync failure unless the user requested that mutation or explicitly agrees after you explain the tradeoff. `wallets update --backend ...`, `--gap-limit`, and `backends set-default` change durable state. Preview automatic review mutations with `--dry-run` on `transfers bulk-pair`, `transfers rules apply`, and `source-funds links bulk-review` before applying them unless the user already approved the exact scoped result.
 30. Never claim a BTC ↔ LBTC swap is already paired, carrying-value, or reflected in reports unless `kassiber --machine journals transfers list` shows the pair or `kassiber transfers pair` just succeeded and you reprocessed journals.
 31. When quarantines remain, distinguish processed holdings from raw transaction-net estimates. Reports show processed journal state only; any netting from `transactions list` must be labeled as an approximate diagnostic rather than a Kassiber holding.
 32. For rate coverage, do not infer the covered time window from `samples` or `days` alone. Use `kassiber rates range` with RFC3339 timestamps around the missing transactions.
 33. Treat Kassiber accounts as wallet/reporting buckets. Do not recommend double-entry charts of accounts, automatic fee expense postings, or external equity counterpart accounts unless the product gains an explicit ledger model.
 34. For planning or codebase work in the Kassiber source repo, treat `TODO.md` as the executable backlog and `docs/plan/` as orientation/guardrails. Verify current behavior against code before acting on a plan doc.
-35. If `kassiber status` (or any other command) returns `passphrase_required`, the local DB is SQLCipher-encrypted. Either prompt the user interactively, or have them re-run the command with `--db-passphrase-fd <FD>` from a parent process. Never embed a passphrase in argv — there is no `--db-passphrase <value>` flag and there will not be one.
+35. If `kassiber status` (or any other command) returns `passphrase_required`, the local DB is SQLCipher-encrypted. A human can enroll prompt-free one-shot commands once with `kassiber secrets remember-unlock`; otherwise prompt interactively or have the controlling process use `--db-passphrase-fd <FD>`. Never ask the agent to see, retain, or place the passphrase in argv — there is no `--db-passphrase <value>` flag.
 36. `kassiber secrets init` is a one-time migration from plaintext to SQLCipher. After it runs, the original plaintext file is preserved as `kassiber.pre-encryption.sqlite3.bak`; Kassiber refuses to overwrite an existing rollback file at that path. Advise the user to verify the encrypted DB opens (`kassiber secrets verify`) and then `rm` the `.bak` themselves once they trust the new file. Forgetting the passphrase means data loss — there is no recovery path and `.kassiber` backups do not help.
 37. `.kassiber` backup files are `tar | age` envelopes that wrap a SQLCipher copy of the DB plus the attachments tree and `backends.env`. They are recoverable with stock `age` + `tar` + `sqlcipher` even without Kassiber installed. Backup decryption uses an outer age passphrase (`--backup-passphrase-fd`) that is independent of the DB passphrase.
 38. The dotenv bootstrap (`backends.env`) is for non-secret addressing only: URLs, `KIND`, chain, network, batch sizes. Tokens, passwords, auth headers, and basic-auth usernames belong in the encrypted DB. If Kassiber warns at startup that the dotenv still has plaintext secrets, run `kassiber secrets migrate-credentials` (or `--dry-run` first) to lift them into the encrypted backends table; the file is rewritten with non-secret rows preserved and a `.pre-credentials-migration-<ts>.bak` snapshot is saved.
-39. Use `kassiber chat` for the daemon-backed assistant when the user wants tool-aware AI help from the CLI. It is the only chat command and uses the same `ai.chat` / `ai.tool_call.consent` loop as the GUI. `kassiber chat --no-tools` covers provider-only exchanges; `kassiber chat --stream-json "<prompt>"` emits the raw daemon stream records as NDJSON for scripting; `kassiber chat -` reads the one-shot prompt from stdin; `--transcript <path>` appends the session's daemon records as a plaintext NDJSON audit log. Piped stdout carries only the answer text — progress and tool chrome go to stderr.
+39. Use `kassiber chat` for the daemon-backed assistant when the user wants tool-aware AI help from the CLI. It is the only chat command and uses the same `ai.chat` / `ai.tool_call.consent` loop as the GUI. `kassiber chat --no-tools` covers provider-only exchanges; `kassiber chat --stream-json "<prompt>"` emits the raw daemon stream records as NDJSON for scripting; `kassiber chat -` reads the one-shot prompt from stdin; `--transcript <path>` appends the public session records as plaintext NDJSON. The private remembered-unlock bootstrap is excluded from argv, environment variables, stdout, transcripts, and model context. Piped stdout carries only the answer text — progress and tool chrome go to stderr.
 40. For scripted `kassiber chat` runs, prefer `--allow-tool <daemon-tool-name>` over broad `--yes`. Machine (`--machine`) and `--stream-json` runs never prompt for consent even on a TTY; there, and without a TTY in rendered mode, unapproved mutating tool requests are denied and fed back to the model as `user_denied`.
 41. Chat history persists inside the SQLCipher database under the `auto` policy only when the DB is encrypted (`kassiber chats config --history auto|on|off`). `kassiber chat --continue` resumes the latest session, `--session <id>` a specific one, `--incognito` skips persistence once. Manage stored sessions with `kassiber chats {list,show,delete,clear}`. Machine chat envelopes carry `session_id` (null when nothing persisted).
 42. For local regtest harness work, use `scripts/integration-harness.sh` from the repo root. `fast` is the no-Docker replay lane; `bitcoin-core` starts a disposable Core/Elements/Fulcrum/local-backend Compose stack; `demo-full` builds a throwaway full accounting book and proves the post-sync refresh path; `demo-up` keeps a persistent demo node/book and must leave reports immediately readable; `demo-tick [N]` adds fresh confirmed business activity to that persistent book; `demo-down [--purge]` stops or removes it.
@@ -87,12 +90,12 @@ If a fast-path command returns a structured error, inspect the envelope and take
 - Empty or stale reports usually mean journals have not been processed since the last change.
 - Reports do not auto-pair BTC ↔ LBTC peg-ins / peg-outs or submarine swaps. If the user has cross-asset swap activity, inspect for likely pairs and use `kassiber transfers pair` before trusting reports.
 - Use `kassiber --machine journals transfers list` when you need the exact transfer / swap links Kassiber computed. Do not infer them from `journals process` counts alone.
-- `--machine` implies JSON mode. Use it alone or with `--format json`; do not combine it with any other explicit `--format` value.
+- `--machine` implies JSON and non-interactive mode. Use it alone or with `--format json`; do not combine it with another explicit format and do not expect it to prompt.
 - `wallets sync` uses either `--wallet <label-or-id>` or `--all`, never both; `transactions` needs the `list` subcommand and ranks raw rows with `--sort amount --order asc|desc`; `journals quarantined` has no `--limit`; `rates range --start/--end` expect RFC3339 UTC strings and supports `--order asc|desc`.
 - `backends get/list` and `wallets get/create/update` intentionally return allowlisted safe views. Look for presence and state flags instead of expecting raw credentials, raw descriptors, or arbitrary config keys back.
 - For new desktop wallet connections, default to mainnet unless the user says otherwise and use the setup modal flow. For CLI-only handoff, keep secrets out of chat with placeholders or fd/stdin forms.
 - Quarantined transactions are omitted from accurate downstream reporting until resolved or excluded.
-- Paginated list commands keep rows under command-specific keys such as `.data.records` and `.data.events`. Do not assume every list response uses the same field name.
+- Paginated list commands keep rows under command-specific keys such as `.data.records` and `.data.events`. Do not assume every list response uses the same field name; cursor state is mirrored uniformly under `.data.page` while legacy `next_cursor` / `has_more` fields remain available.
 - Follow `next_cursor` only when the user asks for all/full/export/audit output. For top-N, largest/smallest, or summary questions, stop after the correctly sorted first page.
 - Cross-asset `--policy carrying-value` pairing is Austrian-only right now. Outside Austrian books, BTC ↔ LBTC manual pairs still stay on the normal SELL + BUY path, so do not describe them as carrying-value.
 - `kassiber status` may resolve to a legacy XDG path on machines with older state trees. Use status output, not assumptions, to find the live database.
@@ -134,7 +137,7 @@ Related notes:
 - For balance sheet, portfolio, capital gains, balance history, PDF export, and rates, read [references/reports.md](references/reports.md).
 - For quick state checks and smoke validation, read [references/verification.md](references/verification.md) and use `scripts/verify-state.sh` when helpful.
 - For common failure modes and path confusion, read [references/troubleshooting.md](references/troubleshooting.md).
-- For SQLCipher encryption (`kassiber secrets ...`), `tar | age` backups (`kassiber backup ...`), passphrase entry, and the `--*-stdin` / `--*-fd` secret-input channels, read [references/secrets-and-backup.md](references/secrets-and-backup.md).
+- For SQLCipher encryption (`kassiber secrets ...`), remembered unlock, `tar | age` backups (`kassiber backup ...`), passphrase entry, and the `--*-stdin` / `--*-fd` secret-input channels, read [references/secrets-and-backup.md](references/secrets-and-backup.md).
 - For the local regtest integration harness and persistent demo book, read `docs/reference/testing.md` in the Kassiber source repo.
 
 ## Report Selection
@@ -157,6 +160,7 @@ If command shape is unclear, consult:
 
 ```bash
 kassiber --help
+kassiber --machine commands describe <command> [subcommand]
 kassiber <command> --help
 kassiber <command> <subcommand> --help
 ```
