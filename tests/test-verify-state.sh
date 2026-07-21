@@ -5,9 +5,10 @@ TEST_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/kassiber-skill-tests.XXXXXX")"
 trap 'rm -rf -- "$TEST_ROOT"' EXIT
 FAKE_BIN="$TEST_ROOT/bin"
 FAKE_LOG="$TEST_ROOT/calls.log"
+CAPTURE_TMP="$TEST_ROOT/capture"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 VERIFY_SCRIPT="$(cd "$SCRIPT_DIR/.." && pwd -P)/scripts/verify-state.sh"
-mkdir -p "$FAKE_BIN"
+mkdir -p "$FAKE_BIN" "$CAPTURE_TMP"
 
 cat >"$FAKE_BIN/kassiber" <<'FAKE'
 #!/usr/bin/env bash
@@ -21,20 +22,23 @@ fi
 
 if [[ " $* " == *" operator status " ]]; then
   case "${VERIFY_SCENARIO:?}" in
-    manual_success)
-      printf '%s\n' '{"kind":"operator.status","schema_version":1,"data":{"broker":"stopped","lease":"locked","mode":{"configured":"manual","effective":"manual","binding_state":"valid"}}}'
+    manual_success|invalid_status|malformed_status)
+      printf '%s\n' '{"kind":"operator.status","schema_version":1,"data":{"broker":"stopped","lease":"locked","mode":{"configured":"manual","effective":"manual","legacy_inferred":false,"binding_state":"valid"}}}'
       ;;
     brokered_success)
-      printf '%s\n' '{"kind":"operator.status","schema_version":1,"data":{"broker":"running","lease":"unlocked","project":"project-public-id","mode":{"configured":"brokered","effective":"brokered","binding_state":"valid"},"capability":"accounting_decisions","granted_capabilities":["read","operator","accounting_decisions"],"authentication_method":"password","unlocked_at":"2026-07-21T10:00:00Z","expires_at":null,"until_lock":true,"queued_operations":0,"running_operations":0,"worker_state":"idle"}}'
+      printf '%s\n' '{"kind":"operator.status","schema_version":1,"data":{"broker":"running","lease":"unlocked","project":"project-public-id","mode":{"configured":"brokered","effective":"brokered","legacy_inferred":false,"binding_state":"valid"},"capability":"accounting_decisions","granted_capabilities":["read","operator","accounting_decisions"],"authentication_method":"password","unlocked_at":"2026-07-21T10:00:00Z","expires_at":null,"until_lock":true,"queued_operations":0,"running_operations":0,"worker_state":"idle"}}'
       ;;
     brokered_locked)
-      printf '%s\n' '{"kind":"operator.status","schema_version":1,"data":{"broker":"stopped","lease":"locked","mode":{"configured":"brokered","effective":"brokered","binding_state":"valid"}}}'
+      printf '%s\n' '{"kind":"operator.status","schema_version":1,"data":{"broker":"stopped","lease":"locked","mode":{"configured":"brokered","effective":"brokered","legacy_inferred":false,"binding_state":"valid"}}}'
       ;;
     unattended_success|unattended_stale)
-      printf '%s\n' '{"kind":"operator.status","schema_version":1,"data":{"broker":"stopped","lease":"locked","mode":{"configured":"unattended","effective":"unattended","binding_state":"valid"}}}'
+      printf '%s\n' '{"kind":"operator.status","schema_version":1,"data":{"broker":"stopped","lease":"locked","mode":{"configured":"unattended","effective":"unattended","legacy_inferred":false,"binding_state":"valid"}}}'
       ;;
     invalid_operator)
       printf '%s\n' '{"kind":"status","schema_version":1,"data":{}}'
+      ;;
+    partial_operator)
+      printf '%s\n' '{"kind":"operator.status","schema_version":1,"data":{}}'
       ;;
   esac
   exit 0
@@ -50,6 +54,14 @@ if [[ " $* " == *" status " ]]; then
       printf '%s\n' 'remembered_unlock_stale: stored passphrase did not unlock this database' >&2
       printf '%s\n' '{"kind":"error","schema_version":1,"error":{"code":"interaction_required","message":"database authorization requires local interaction","hint":"Run locally.","details":null,"retryable":false,"debug":null}}'
       exit 1
+      ;;
+    invalid_status)
+      printf '%s\n' '{"kind":"other","schema_version":1,"data":{}}'
+      exit 0
+      ;;
+    malformed_status)
+      printf '%s\n' 'not-json'
+      exit 0
       ;;
     *)
       printf '%s\n' '{"kind":"status","schema_version":1,"data":{"version":"test","state_root":"/state","data_root":"/data","database":"/data/kassiber.sqlite3","current_workspace":"personal","current_profile":"main","wallets":2,"transactions":3,"journal_entries":3,"quarantines":0}}'
@@ -68,7 +80,7 @@ run_success() {
   shift
   : >"$FAKE_LOG"
   VERIFY_SCENARIO="$scenario" FAKE_LOG="$FAKE_LOG" \
-    PATH="$FAKE_BIN:$PATH" "$VERIFY_SCRIPT" "$@"
+    TMPDIR="$CAPTURE_TMP" PATH="$FAKE_BIN:$PATH" "$VERIFY_SCRIPT" "$@"
 }
 
 run_failure() {
@@ -77,7 +89,7 @@ run_failure() {
   : >"$FAKE_LOG"
   set +e
   FAILURE_OUTPUT=$(VERIFY_SCENARIO="$scenario" FAKE_LOG="$FAKE_LOG" \
-    PATH="$FAKE_BIN:$PATH" "$VERIFY_SCRIPT" "$@")
+    TMPDIR="$CAPTURE_TMP" PATH="$FAKE_BIN:$PATH" "$VERIFY_SCRIPT" "$@")
   FAILURE_CODE=$?
   set -e
   [[ "$FAILURE_CODE" -ne 0 ]]
@@ -132,6 +144,22 @@ run_failure invalid_operator --data-root /example/data
 jq -e '.error.code == "verify_state_operator_status_invalid"' >/dev/null \
   <<<"$FAILURE_OUTPUT"
 
+run_failure partial_operator --data-root /example/data
+jq -e '.error.code == "verify_state_operator_status_invalid"' >/dev/null \
+  <<<"$FAILURE_OUTPUT"
+
+run_failure invalid_status --data-root /example/data
+jq -e '.error.code == "verify_state_status_invalid"' >/dev/null \
+  <<<"$FAILURE_OUTPUT"
+
+run_failure malformed_status --data-root /example/data
+jq -e '.error.code == "verify_state_status_invalid"' >/dev/null \
+  <<<"$FAILURE_OUTPUT"
+
+run_failure manual_success --section typo
+jq -e '.error.code == "invalid_section"' >/dev/null <<<"$FAILURE_OUTPUT"
+[[ ! -s "$FAKE_LOG" ]]
+
 set +e
 invalid_locator_output=$(PATH="$FAKE_BIN:$PATH" "$VERIFY_SCRIPT" \
   --project one --data-root /two)
@@ -139,5 +167,11 @@ invalid_locator_code=$?
 set -e
 [[ "$invalid_locator_code" -ne 0 ]]
 jq -e '.error.code == "invalid_option"' >/dev/null <<<"$invalid_locator_output"
+
+if find "$CAPTURE_TMP" -maxdepth 1 -name 'kassiber-skill-stderr.*' -print -quit \
+  | grep -q .; then
+  printf '%s\n' 'verify-state left a captured stderr file behind' >&2
+  exit 1
+fi
 
 printf '%s\n' 'verify-state tests passed'

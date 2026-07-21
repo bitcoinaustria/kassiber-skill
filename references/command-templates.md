@@ -53,8 +53,8 @@ kassiber --machine operator operation status <operation-id>
 kassiber --machine operator operation cancel <operation-id>
 ```
 
-A brokered admin command uses fresh single-operation authorization. The global
-flag belongs before the subcommand tree:
+A broker-routed database admin command uses fresh single-operation
+authorization. The global flag belongs before the subcommand tree:
 
 ```bash
 kassiber --operator-auth-fd 3 --machine <admin-command> ... 3< /secure/input
@@ -62,6 +62,10 @@ kassiber --operator-auth-fd 3 --machine <admin-command> ... 3< /secure/input
 
 Do not retry a `result_unknown` mutation until durable accounting state has
 been reconciled.
+
+Direct revocation controls are exceptions: `kassiber operator lock` and queued
+`operator operation cancel` do not use `--operator-auth-fd`. Mode and Touch ID
+configuration use their own command-local `--passphrase-fd`.
 
 ## AI chat
 

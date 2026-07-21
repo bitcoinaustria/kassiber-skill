@@ -155,9 +155,9 @@ If a command returns:
   context. Pass every declared `--workspace` and `--profile` flag explicitly.
 - `operator_chat_not_supported` — CLI chat is not broker-routed. Use direct
   brokered commands, or have the human lock and select manual mode before chat.
-- `operator_admin_auth_required` — the command is admin-classified and needs a
+- `operator_admin_auth_required` — a broker-routed database command needs a
   fresh passphrase through global `--operator-auth-fd FD`; the standing lease
-  cannot be upgraded.
+  cannot be upgraded. Direct lock/cancel revocation controls do not use it.
 - `operator_policy_binding_required` / `operator_policy_binding_mismatch` — the
   reusable mode or credential is not authenticated to this current canonical
   project/database. Re-authorize the intended mode; do not copy settings or

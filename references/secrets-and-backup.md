@@ -28,7 +28,7 @@ the project to manual mode. Brokered mode never silently reads the unattended
 credential.
 
 See [operator-broker.md](operator-broker.md) for lease capabilities, explicit
-book scope, operation IDs, and fresh admin authorization.
+book scope, operation IDs, and fresh brokered database-admin authorization.
 
 ## Passphrase entry
 
@@ -128,18 +128,22 @@ desktop-only item.
 
 Desktop Settings can forget only Touch ID. `kassiber secrets forget-unlock`
 forgets only the CLI copy. The desktop **Forget all unlock methods** action
-removes both current items plus the migration-only legacy item. None of these
-actions changes the SQLCipher passphrase or provides recovery.
+removes the desktop and CLI remembered items plus the migration-only legacy
+item. It does not remove the separate operator Touch ID credential or revoke a
+live broker lease. Use `kassiber operator touch-id forget` for that credential
+and `kassiber operator lock` for the selected project's active lease. None of
+these actions changes the SQLCipher passphrase or provides recovery.
 An unsigned/ad-hoc preview refuses to replace an existing protected enrollment,
 and protected-item removal cleans any preview fallback first rather than
 silently leaving another valid desktop copy.
 
 Operator-broker Touch ID is a third, broker-specific namespace and policy. It
-is available only to production-signed macOS app/helper builds and opens a
-broker lease; it does not turn CLI remembered unlock into biometric
-authorization. Windows Hello and Linux biometric/polkit integration are not
-implemented. Password-authorized broker sessions work on macOS, Linux, and
-Windows.
+is available only through the production-signed macOS desktop app's bundled
+CLI/helper identity and opens a broker lease; a normal source or Python CLI
+uses password authorization. Operator Touch ID does not turn CLI remembered
+unlock into biometric authorization. Windows Hello and Linux biometric/polkit
+integration are not implemented. Password-authorized broker sessions work on
+macOS, Linux, and Windows.
 
 ## First-time encryption
 
@@ -183,9 +187,15 @@ kassiber secrets change-passphrase --db-passphrase-fd 3 --new-passphrase-fd 4 \
 
 Rotation runs `PRAGMA rekey` and then re-opens the file with the new
 passphrase to verify. The old passphrase will not unlock the file after this
-returns successfully. A desktop-initiated rotation refreshes both enrolled
-copies. A CLI-initiated rotation refreshes the CLI copy and invalidates desktop
-Touch ID until the user manually enters the new passphrase and re-enrolls it.
+returns successfully. A desktop-initiated rotation refreshes the desktop and
+CLI remembered copies. A CLI-initiated rotation refreshes the CLI copy and
+invalidates desktop Touch ID until the user manually enters the new passphrase
+and re-enrolls it.
+
+Every successful passphrase rotation also invalidates operator Touch ID; a
+human must re-enroll it with `kassiber operator touch-id enroll` before using
+that method again.
+
 If the CLI copy cannot be updated, Kassiber disables CLI remembered unlock and
 warns on stderr rather than leaving a known-stale credential active.
 
@@ -292,8 +302,8 @@ the secret in chat.
 
 ## Reveal: pulling a secret back out of the DB
 
-Secret reveal is admin work. In a brokered CLI session it requires fresh,
-single-operation authorization through the global `--operator-auth-fd FD`
+Secret reveal is database admin work. In a brokered CLI session it requires
+fresh, single-operation authorization through global `--operator-auth-fd FD`
 even though the normal lease is active. Desktop daemon reveal keeps its
 existing `auth_required`/`auth_response` round-trip; a wrong passphrase
 produces `local_auth_denied`.

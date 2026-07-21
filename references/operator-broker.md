@@ -17,9 +17,13 @@ Different OS login users have separate broker endpoints and leases. SQLCipher
 still protects data at rest, and every in-memory lease disappears on explicit
 lock, broker death, logout, or reboot.
 
-Never ask a user to paste a database passphrase into chat. Kassiber accepts it
-only from a controlling-terminal prompt or a dedicated file descriptor; it is
-not an argv, environment, or JSON request value.
+Never ask a user to paste a database passphrase into chat. A human-supplied raw
+passphrase enters the CLI only through a controlling-terminal prompt or a
+dedicated file descriptor. It never appears in caller-visible argv,
+environment, broker JSON frames, logs, status, or output; broker IPC carries it
+in a separate one-use secret frame. Native credential flows and the private
+desktop/CLI-chat daemon unlock exchange are internal implementation paths, not
+envelopes an agent should construct or receive.
 
 ## Unlock modes
 
@@ -42,6 +46,19 @@ The three explicit modes are:
 
 Brokered mode never falls through to unattended remembered unlock. Do not
 change a user's mode merely to make a command succeed.
+
+A human can select a mode explicitly with:
+
+```bash
+kassiber operator mode manual
+kassiber operator mode brokered
+kassiber operator mode unattended
+```
+
+Mode selection uses a fresh prompt or the command-local `--passphrase-fd FD`.
+Selecting `unattended` alone does not enroll a credential; use
+`kassiber secrets remember-unlock` for that complete authenticated flow. A
+successful `operator unlock` selects brokered mode automatically.
 
 ## Start and end a brokered session
 
@@ -117,10 +134,11 @@ If a mutation is `result_unknown`, reconcile durable domain state before
 retrying. Kassiber does not claim exactly-once delivery across a broker or
 worker crash.
 
-## Fresh admin authorization
+## Fresh brokered database-admin authorization
 
-Admin work always requires fresh, single-operation authorization, even during
-an active lease. The controlling process passes it through the global flag:
+`admin` is never a standing lease grant. An ordinary database command
+classified as admin and routed through an active broker lease requires fresh,
+single-operation authorization through the global flag:
 
 ```bash
 kassiber --operator-auth-fd 3 --machine <admin-command> ... 3< /secure/input
@@ -129,16 +147,23 @@ kassiber --operator-auth-fd 3 --machine <admin-command> ... 3< /secure/input
 The flag belongs before the subcommand tree. It is challenge-bound, short-lived,
 and consumed for one operation; it does not upgrade the standing lease.
 
-Secret reveal, passphrase rotation, destructive reset/delete, unlock-policy or
-credential changes, backup administration, and replication member/device
-administration are examples of admin work. Follow `commands describe` rather
-than guessing a command's capability.
+Secret reveal, passphrase rotation, destructive reset/delete, credential
+changes, backup administration, and replication member/device administration
+are examples of broker-routed database admin work.
+
+Direct `operator` lifecycle controls have their own contract. The
+`operator unlock`, `operator mode`, and `operator touch-id enroll|forget`
+commands use their command-local authentication flags or prompts. Public
+status, explicit lock, operation status, and queued-operation cancellation do
+not consume `--operator-auth-fd`; lock and cancel reduce existing authority.
+Inspect `commands describe` and command help instead of inferring prompts from
+the capability label alone.
 
 ## Native authentication
 
 Password/passphrase authorization works on macOS, Linux, and Windows through
-the prompt/fd path. Production-signed macOS builds can additionally use the
-operator-specific Touch ID enrollment:
+the prompt/fd path. On macOS, only the production-signed desktop app's bundled
+CLI/helper identity can additionally use operator-specific Touch ID enrollment:
 
 ```bash
 kassiber operator touch-id status

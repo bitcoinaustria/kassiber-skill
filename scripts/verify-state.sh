@@ -17,6 +17,7 @@ status_json=""
 operator_json='{}'
 command_stdout=""
 command_stderr=""
+capture_stderr_file=""
 
 if ! command -v jq >/dev/null 2>&1; then
   printf '%s\n' '{"kind":"error","schema_version":1,"error":{"code":"missing_dependency","message":"jq is required for verify-state.sh","hint":"Install jq and rerun the helper.","details":{"dependency":"jq"},"retryable":false,"debug":null}}'
@@ -55,6 +56,18 @@ emit_success() {
     --argjson data "$data" \
     '{kind: $kind, schema_version: $schema_version, data: $data}'
 }
+
+cleanup_capture_file() {
+  if [[ -n "$capture_stderr_file" ]]; then
+    rm -f -- "$capture_stderr_file"
+    capture_stderr_file=""
+  fi
+}
+
+trap cleanup_capture_file EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -114,6 +127,18 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+case "$SECTION" in
+  runtime|context|wallets|journals|quarantine|all) ;;
+  *)
+    emit_error \
+      "invalid_section" \
+      "Unknown section: $SECTION" \
+      "Use --section runtime|context|wallets|journals|quarantine|all." \
+      "$(jq -n --arg section "$SECTION" '{section: $section}')"
+    exit 1
+    ;;
+esac
+
 detect_runner() {
   if command -v kassiber >/dev/null 2>&1; then
     RUNNER=(kassiber)
@@ -158,15 +183,16 @@ run_kassiber() {
 }
 
 run_kassiber_captured() {
-  local stderr_file returncode
-  stderr_file="$(mktemp "${TMPDIR:-/tmp}/kassiber-skill-stderr.XXXXXX")"
-  if command_stdout=$(run_kassiber "$@" 2>"$stderr_file"); then
+  local returncode
+  cleanup_capture_file
+  capture_stderr_file="$(mktemp "${TMPDIR:-/tmp}/kassiber-skill-stderr.XXXXXX")"
+  if command_stdout=$(run_kassiber "$@" 2>"$capture_stderr_file"); then
     returncode=0
   else
     returncode=$?
   fi
-  command_stderr="$(<"$stderr_file")"
-  rm -f "$stderr_file"
+  command_stderr="$(<"$capture_stderr_file")"
+  cleanup_capture_file
   return "$returncode"
 }
 
@@ -195,7 +221,47 @@ run_operator_preflight() {
     return 1
   fi
   output="$command_stdout"
-  if ! jq -e '.kind == "operator.status" and (.data | type == "object")' >/dev/null 2>&1 <<<"$output"; then
+  if ! jq -e '
+    .kind == "operator.status" and
+    .schema_version == 1 and
+    (.data | type == "object") and
+    (.data.broker == "running" or .data.broker == "stopped") and
+    (.data.lease == "locked" or .data.lease == "unlocked") and
+    (.data.mode | type == "object") and
+    (.data.mode | has("configured")) and
+    (.data.mode.configured == null or
+      .data.mode.configured == "manual" or
+      .data.mode.configured == "brokered" or
+      .data.mode.configured == "unattended") and
+    (.data.mode.effective == "manual" or
+      .data.mode.effective == "brokered" or
+      .data.mode.effective == "unattended") and
+    (.data.mode.binding_state == "missing" or
+      .data.mode.binding_state == "mismatch" or
+      .data.mode.binding_state == "valid") and
+    (.data.mode.legacy_inferred == false) and
+    (if .data.broker == "stopped" then .data.lease == "locked" else true end) and
+    (if .data.lease == "unlocked" then
+      .data.broker == "running" and
+      (.data.project | type == "string" and length > 0) and
+      (.data.capability == "read" or
+        .data.capability == "operator" or
+        .data.capability == "accounting_decisions") and
+      (.data.granted_capabilities ==
+        (if .data.capability == "read" then ["read"]
+         elif .data.capability == "operator" then ["read", "operator"]
+         else ["read", "operator", "accounting_decisions"] end)) and
+      (.data.authentication_method == "password" or
+        .data.authentication_method == "touch_id") and
+      (.data.unlocked_at | type == "string" and length > 0) and
+      (.data.until_lock | type == "boolean") and
+      (.data.queued_operations | type == "number" and . >= 0 and floor == .) and
+      (.data.running_operations | type == "number" and . >= 0 and floor == .) and
+      (.data.worker_state == "idle" or
+        .data.worker_state == "queued" or
+        .data.worker_state == "running")
+    else true end)
+  ' >/dev/null 2>&1 <<<"$output"; then
     emit_error \
       "verify_state_operator_status_invalid" \
       "Kassiber returned an invalid operator-status envelope." \
@@ -204,10 +270,10 @@ run_operator_preflight() {
     return 1
   fi
   operator_json=$(jq '.data | {
-    broker: (.broker // "unknown"),
-    lease: (.lease // "unknown"),
+    broker: .broker,
+    lease: .lease,
     project: (.project // null),
-    mode: (.mode // {configured: null, effective: "manual", binding_state: "missing"}),
+    mode: .mode,
     capability: (.capability // null),
     granted_capabilities: (.granted_capabilities // []),
     authentication_method: (.authentication_method // null),
@@ -223,8 +289,30 @@ run_operator_preflight() {
 run_status() {
   local details
   if run_kassiber_captured "${GLOBAL_ARGS[@]}" --machine status; then
-    status_json="$command_stdout"
-    return 0
+    if jq -e '
+      .kind == "status" and
+      .schema_version == 1 and
+      (.data | type == "object") and
+      (.data.version | type == "string" and length > 0) and
+      (.data.state_root | type == "string" and length > 0) and
+      (.data.data_root | type == "string" and length > 0) and
+      (.data.database | type == "string" and length > 0) and
+      (.data.current_workspace == null or (.data.current_workspace | type == "string")) and
+      (.data.current_profile == null or (.data.current_profile | type == "string")) and
+      (.data.wallets | type == "number" and . >= 0 and floor == .) and
+      (.data.transactions | type == "number" and . >= 0 and floor == .) and
+      (.data.journal_entries | type == "number" and . >= 0 and floor == .) and
+      (.data.quarantines | type == "number" and . >= 0 and floor == .)
+    ' >/dev/null 2>&1 <<<"$command_stdout"; then
+      status_json="$command_stdout"
+      return 0
+    fi
+    emit_error \
+      "verify_state_status_invalid" \
+      "Kassiber returned an invalid status envelope." \
+      "Run \`kassiber --machine status\` and inspect the local installation." \
+      "$(jq -n --arg runner "$RUNNER_MODE" '{runner: $runner}')"
+    return 1
   fi
   if jq -e . >/dev/null 2>&1 <<<"$command_stdout"; then
     if [[ "$(jq -r '.kind // ""' <<<"$command_stdout")" == "error" ]]; then
@@ -345,14 +433,6 @@ case "$SECTION" in
     check_wallets
     check_journals
     check_quarantine
-    ;;
-  *)
-    emit_error \
-      "invalid_section" \
-      "Unknown section: $SECTION" \
-      "Use --section runtime|context|wallets|journals|quarantine|all." \
-      "$(jq -n --arg section "$SECTION" '{section: $section}')"
-    exit 1
     ;;
 esac
 

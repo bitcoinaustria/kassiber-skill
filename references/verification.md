@@ -35,8 +35,9 @@ It checks:
 
 - the selected project's explicit operator mode and public-safe lease state
   before any DB-opening command
-- encrypted-database readiness through the selected mode: active brokered
-  lease, explicit unattended enrollment, or manual authorization
+- encrypted-database readiness through an active brokered lease or explicit
+  unattended enrollment; encrypted manual mode deliberately returns
+  `interaction_required` because this helper accepts no passphrase input
 - runtime and path resolution
 - current books set / book (`workspace` and `profile` in CLI output)
 - wallet count
