@@ -98,13 +98,26 @@ kassiber secrets verify      # confirm the encrypted DB opens cleanly
 kassiber secrets status
 ```
 
-After this runs, every later command needs the passphrase — interactively, via
-`--db-passphrase-fd <FD>`, or through explicit `kassiber secrets
-remember-unlock` enrollment. The pre-encryption plaintext file is preserved
-as `kassiber.pre-encryption.sqlite3.bak` so the user can roll back; advise
-them to delete it once they trust the new encrypted DB. Kassiber refuses to
-overwrite an existing rollback file at that path; inspect, move, or delete the
-old file before retrying. There is no recovery path if the passphrase is lost.
+After this runs, the effective unlock mode is fail-closed `manual` until the
+human deliberately chooses otherwise. For an agent work session, the
+recommended next step is an in-memory brokered lease:
+
+```bash
+# human in a controlling terminal; defaults to accounting_decisions
+kassiber operator unlock --until-lock
+kassiber --machine operator status
+```
+
+The alternatives are `manual` per-process prompt/`--db-passphrase-fd FD` and
+explicit `unattended` native credential storage via `kassiber secrets
+remember-unlock`. Brokered mode never reads the unattended credential. Do not
+enroll unattended mode merely to avoid an agent handoff.
+
+The pre-encryption plaintext file is preserved as
+`kassiber.pre-encryption.sqlite3.bak` so the user can roll back; advise them to
+delete it once they trust the new encrypted DB. Kassiber refuses to overwrite
+an existing rollback file at that path; inspect, move, or delete the old file
+before retrying. There is no recovery path if the passphrase is lost.
 
 If `backends.env` already had API tokens, RPC passwords, or auth headers
 before the migration, lift them into the encrypted DB so they no longer sit
@@ -118,4 +131,6 @@ kassiber secrets migrate-credentials
 URLs and other addressing fields stay in the dotenv; only the secret-shaped
 entries move. See [references/secrets-and-backup.md](secrets-and-backup.md)
 for the full flow, the `--*-stdin` / `--*-fd` channels for credential input,
-and the `kassiber backup` round-trip.
+and the `kassiber backup` round-trip. See
+[references/operator-broker.md](operator-broker.md) for lease capabilities,
+scope requirements, and lock/revocation behavior.

@@ -8,10 +8,13 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 REPO_ROOT="${KASSIBER_REPO:-}"
 RUNNER=()
 RUNNER_MODE=""
+GLOBAL_ARGS=()
+LOCATOR=""
 data='{}'
 issues='[]'
 attention='[]'
 status_json=""
+operator_json='{}'
 command_stdout=""
 command_stderr=""
 
@@ -56,14 +59,55 @@ emit_success() {
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --section)
-      SECTION="${2:?'--section requires a value: runtime|context|wallets|journals|quarantine|all'}"
+      if [[ $# -lt 2 || -z "${2:-}" ]]; then
+        emit_error \
+          "invalid_option" \
+          "--section requires a value." \
+          "Use runtime|context|wallets|journals|quarantine|all." \
+          'null'
+        exit 1
+      fi
+      SECTION="$2"
+      shift 2
+      ;;
+    --project|--data-root)
+      if [[ $# -lt 2 || -z "${2:-}" ]]; then
+        emit_error \
+          "invalid_option" \
+          "$1 requires a value." \
+          "Pass a project id or project data-root path." \
+          "$(jq -n --arg option "$1" '{option: $option}')"
+        exit 1
+      fi
+      if [[ -n "$LOCATOR" ]]; then
+        emit_error \
+          "invalid_option" \
+          "Choose only one project locator." \
+          "Use either --project or --data-root, not both." \
+          "$(jq -n --arg first "$LOCATOR" --arg second "$1" '{first: $first, second: $second}')"
+        exit 1
+      fi
+      LOCATOR="$1"
+      GLOBAL_ARGS+=("$1" "$2")
+      shift 2
+      ;;
+    --env-file)
+      if [[ $# -lt 2 || -z "${2:-}" ]]; then
+        emit_error \
+          "invalid_option" \
+          "--env-file requires a value." \
+          "Pass the same dotenv path used by the Kassiber CLI." \
+          'null'
+        exit 1
+      fi
+      GLOBAL_ARGS+=("$1" "$2")
       shift 2
       ;;
     *)
       emit_error \
         "invalid_option" \
         "Unknown option: $1" \
-        "Use --section runtime|context|wallets|journals|quarantine|all." \
+        "Use --section runtime|context|wallets|journals|quarantine|all and optionally --project, --data-root, or --env-file." \
         "$(jq -n --arg option "$1" '{option: $option}')"
       exit 1
       ;;
@@ -136,59 +180,60 @@ add_attention() {
   attention=$(jq --arg item "$item" '. + [$item]' <<<"$attention")
 }
 
-run_unlock_preflight() {
-  local output encrypted available configured cli_enabled details
-  if ! run_kassiber_captured --machine secrets status; then
+run_operator_preflight() {
+  local output
+  if ! run_kassiber_captured "${GLOBAL_ARGS[@]}" --machine operator status; then
+    if jq -e '.kind == "error"' >/dev/null 2>&1 <<<"$command_stdout"; then
+      printf '%s\n' "$command_stdout"
+      return 1
+    fi
     emit_error \
-      "verify_state_secrets_status_failed" \
-      "Unable to inspect the Kassiber unlock state." \
-      "Run \`kassiber --machine secrets status\` locally and fix the reported credential-store error." \
-      "$(jq -n --arg stdout "$command_stdout" --arg stderr "$command_stderr" '{stdout: $stdout, stderr: $stderr}')"
+      "verify_state_operator_status_failed" \
+      "Unable to inspect the Kassiber operator state." \
+      "Run \`kassiber --machine operator status\` locally and verify this skill matches the installed Kassiber version." \
+      "$(jq -n --arg runner "$RUNNER_MODE" '{runner: $runner}')"
     return 1
   fi
   output="$command_stdout"
-  if ! jq -e '.kind == "secrets.status" and (.data | type == "object")' >/dev/null 2>&1 <<<"$output"; then
+  if ! jq -e '.kind == "operator.status" and (.data | type == "object")' >/dev/null 2>&1 <<<"$output"; then
     emit_error \
-      "verify_state_secrets_status_invalid" \
-      "Kassiber returned an invalid secrets-status envelope." \
-      "Run \`kassiber --machine secrets status\` and inspect the local installation." \
-      "$(jq -n --arg stdout "$output" --arg stderr "$command_stderr" '{stdout: $stdout, stderr: $stderr}')"
+      "verify_state_operator_status_invalid" \
+      "Kassiber returned an invalid operator-status envelope." \
+      "Run \`kassiber --machine operator status\` and inspect the local installation." \
+      "$(jq -n --arg runner "$RUNNER_MODE" '{runner: $runner}')"
     return 1
   fi
-
-  encrypted=$(jq -r '.data.encrypted // false' <<<"$output")
-  [[ "$encrypted" == "true" ]] || return 0
-  available=$(jq -r '.data.remembered_unlock.available // false' <<<"$output")
-  configured=$(jq -r '.data.remembered_unlock.configured // false' <<<"$output")
-  cli_enabled=$(jq -r '.data.remembered_unlock.cli_enabled // false' <<<"$output")
-  if [[ "$available" == "true" && "$configured" == "true" && "$cli_enabled" == "true" ]]; then
-    return 0
-  fi
-
-  details=$(jq '{remembered_unlock: .data.remembered_unlock, database: .data.path}' <<<"$output")
-  emit_error \
-    "remembered_unlock_required" \
-    "The encrypted Kassiber database is not ready for prompt-free agent access." \
-    "A human should run \`kassiber secrets remember-unlock\` in a local interactive terminal, then rerun this helper. The agent must never receive the passphrase." \
-    "$details"
-  return 1
+  operator_json=$(jq '.data | {
+    broker: (.broker // "unknown"),
+    lease: (.lease // "unknown"),
+    project: (.project // null),
+    mode: (.mode // {configured: null, effective: "manual", binding_state: "missing"}),
+    capability: (.capability // null),
+    granted_capabilities: (.granted_capabilities // []),
+    authentication_method: (.authentication_method // null),
+    unlocked_at: (.unlocked_at // null),
+    expires_at: (.expires_at // null),
+    until_lock: (.until_lock // false),
+    queued_operations: (.queued_operations // 0),
+    running_operations: (.running_operations // 0),
+    worker_state: (.worker_state // null)
+  }' <<<"$output")
 }
 
 run_status() {
-  local code details
-  if run_kassiber_captured --machine status; then
+  local details
+  if run_kassiber_captured "${GLOBAL_ARGS[@]}" --machine status; then
     status_json="$command_stdout"
     return 0
   fi
   if jq -e . >/dev/null 2>&1 <<<"$command_stdout"; then
     if [[ "$(jq -r '.kind // ""' <<<"$command_stdout")" == "error" ]]; then
-      code=$(jq -r '.error.code // ""' <<<"$command_stdout")
-      if [[ "$code" == "passphrase_required" && "$command_stderr" == *"remembered_unlock_stale"* ]]; then
-        details=$(jq -n --arg stderr "$command_stderr" '{stderr: $stderr}')
+      if [[ "$command_stderr" == *"remembered_unlock_stale"* ]]; then
+        details=$(jq -n --arg mode "$(jq -r '.mode.effective // "unattended"' <<<"$operator_json")" '{mode: $mode}')
         emit_error \
           "remembered_unlock_stale" \
           "The enrolled CLI credential no longer unlocks this database." \
-          "A human should run \`kassiber secrets remember-unlock\` locally to replace it, then rerun this helper." \
+          "A human should re-enroll unattended unlock locally or deliberately select manual/brokered mode, then rerun this helper." \
           "$details"
         return 1
       fi
@@ -200,7 +245,7 @@ run_status() {
     "verify_state_status_failed" \
     "Unable to collect Kassiber status." \
     "Ensure Kassiber is installed or run this helper from a Kassiber repo checkout with uv available." \
-    "$(jq -n --arg stdout "$command_stdout" --arg stderr "$command_stderr" --arg repo_root "$REPO_ROOT" '{stdout: $stdout, stderr: $stderr, repo_root: $repo_root}')"
+    "$(jq -n --arg runner "$RUNNER_MODE" '{runner: $runner}')"
   return 1
 }
 
@@ -280,7 +325,7 @@ check_quarantine() {
   fi
 }
 
-if ! run_unlock_preflight; then
+if ! run_operator_preflight; then
   exit 1
 fi
 
@@ -314,9 +359,10 @@ esac
 all_ok=true
 [[ "$(jq 'length' <<<"$issues")" -eq 0 ]] || all_ok=false
 data=$(jq \
+  --argjson operator "$operator_json" \
   --arg section "$SECTION" \
   --argjson all_ok "$all_ok" \
   --argjson issues "$issues" \
   --argjson attention "$attention" \
-  '.section = $section | .summary = {all_ok: $all_ok, issues: $issues, attention: $attention}' <<<"$data")
+  '.operator = $operator | .section = $section | .summary = {all_ok: $all_ok, issues: $issues, attention: $attention}' <<<"$data")
 emit_success

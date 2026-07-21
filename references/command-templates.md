@@ -22,6 +22,47 @@ structured `interaction_required` error when an fd/stdin secret or one-shot
 input is missing. Use `commands describe [path ...]` to inspect arguments,
 read/mutation class, scope flags, cursor/dry-run support, and DB requirements.
 
+## Operator broker
+
+Inspect or start the selected project's unlock session:
+
+```bash
+kassiber --machine operator status
+kassiber operator unlock --until-lock
+kassiber operator unlock --duration 8h
+kassiber operator unlock --until-lock --capability operator
+kassiber operator lock
+```
+
+The human runs `operator unlock` in a controlling terminal. Agents use
+`--machine` for ordinary work and preserve `interaction_required` rather than
+triggering or simulating a prompt. `accounting_decisions` is the default
+cumulative grant; `admin` is never a standing capability.
+
+Brokered commands with declared book scope must be explicit:
+
+```bash
+kassiber --machine wallets list --workspace personal --profile main
+kassiber --machine journals process --workspace personal --profile main
+```
+
+Accepted operations remain queryable if a client disconnects:
+
+```bash
+kassiber --machine operator operation status <operation-id>
+kassiber --machine operator operation cancel <operation-id>
+```
+
+A brokered admin command uses fresh single-operation authorization. The global
+flag belongs before the subcommand tree:
+
+```bash
+kassiber --operator-auth-fd 3 --machine <admin-command> ... 3< /secure/input
+```
+
+Do not retry a `result_unknown` mutation until durable accounting state has
+been reconciled.
+
 ## AI chat
 
 Use top-level `chat` for the daemon-backed assistant:
@@ -209,22 +250,28 @@ kassiber wallets create \
 
 ## SQLCipher passphrase
 
-The DB passphrase has no argv form by design. Explicit fd input wins, followed
-by an explicitly enrolled remembered copy, then the interactive prompt:
+The DB passphrase has no argv form by design. Its source depends on the
+project's explicit operator mode:
+
+- `manual`: explicit `--db-passphrase-fd FD`, then controlling-terminal prompt.
+- `brokered`: the active in-memory lease; ordinary routed calls never receive
+  or forward the passphrase.
+- `unattended`: the explicitly enrolled CLI credential-store copy.
 
 ```bash
-# interactive (controlling TTY)
+# manual interactive (controlling TTY)
 kassiber status
 
-# fd-based (parent shell opens fd 3)
+# manual fd-based (parent shell opens fd 3)
 kassiber --db-passphrase-fd 3 status 3< /tmp/pass
 
 # pipe (single secret on stdin, no other --*-stdin in play)
 gopass show kassiber/db-pass | kassiber --db-passphrase-fd 0 status
 ```
 
-Wrong passphrase → `unlock_failed`. Missing passphrase against an encrypted
-DB → `passphrase_required`. Plaintext DB → no prompt.
+Wrong passphrase → `unlock_failed`. Missing non-interactive authorization →
+`interaction_required`. Plaintext DB → no prompt. Brokered mode never falls
+through to remembered unlock.
 
 ## Secrets
 
@@ -233,9 +280,9 @@ kassiber secrets status
 kassiber secrets init                              # interactive prompt + confirm
 kassiber secrets init --new-passphrase-fd 4 4< /tmp/new
 kassiber secrets verify                            # confirm encrypted DB opens
-kassiber secrets remember-unlock                   # verify + enroll CLI-only native store
+kassiber secrets remember-unlock                   # verify + select unattended mode
 kassiber secrets remember-unlock --passphrase-fd 3 3< /tmp/pass
-kassiber secrets forget-unlock                     # revoke CLI only + clear CLI opt-in
+kassiber secrets forget-unlock                     # clear CLI copy + return to manual mode
 kassiber secrets change-passphrase                 # interactive
 kassiber secrets change-passphrase --db-passphrase-fd 3 --new-passphrase-fd 4 \
   3< /tmp/old 4< /tmp/new

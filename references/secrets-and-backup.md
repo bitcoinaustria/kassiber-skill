@@ -8,16 +8,41 @@ secret-bearing CLI input.
 These features were added in V4.1. Before then the local SQLite store was
 plaintext on disk and credentials were collected via argv flags.
 
+## Project unlock modes
+
+Kassiber keeps unlock policy explicit per canonical project/database:
+
+- `manual` — each process supplies the passphrase through a controlling-terminal
+  prompt or `--db-passphrase-fd FD`. No reusable lease or credential read.
+- `brokered` — recommended for terminal/agent work. One human authorization
+  creates a capability-scoped, in-memory project lease until its duration,
+  explicit lock, broker death, logout, or reboot.
+- `unattended` — explicit CLI remembered unlock in the native OS credential
+  store. It does not prove continuing user presence.
+
+Inspect the selected project with `kassiber --machine operator status`.
+`kassiber operator unlock --until-lock` both authenticates and selects brokered
+mode. `kassiber secrets remember-unlock` authenticates, enrolls the native
+credential, and selects unattended mode. Forgetting that CLI credential returns
+the project to manual mode. Brokered mode never silently reads the unattended
+credential.
+
+See [operator-broker.md](operator-broker.md) for lease capabilities, explicit
+book scope, operation IDs, and fresh admin authorization.
+
 ## Passphrase entry
 
-The SQLCipher passphrase has no argv form — by design. CLI unlock has three
-channels, in priority order:
+The SQLCipher passphrase has no argv form — by design. In manual mode, CLI
+unlock has these channels in priority order:
 
 - `--db-passphrase-fd <FD>` global flag (any non-negative integer) reads raw
   UTF-8 bytes from an already-open file descriptor. Strips one trailing
   newline so shell redirects work without trimming.
-- An explicitly enrolled native OS credential-store copy.
 - Interactive `getpass()` against the controlling TTY when one is attached.
+
+Brokered mode uses only the active in-memory lease for ordinary routed work.
+Unattended mode uses only the explicitly enrolled native OS credential-store
+copy. These modes do not fall through into one another.
 
 ```bash
 # interactive
@@ -34,7 +59,8 @@ Behavior to remember:
 
 - A wrong passphrase surfaces as the structured `unlock_failed` envelope, not
   a generic SQLite error.
-- A missing passphrase against an encrypted DB produces `passphrase_required`.
+- Missing authorization in machine/non-interactive mode produces the structured
+  `interaction_required` envelope and an actionable local hint.
 - The plaintext code path is preserved: when the on-disk file looks like a
   vanilla SQLite database, no passphrase is asked for and the legacy behavior
   is unchanged.
@@ -43,7 +69,7 @@ Behavior to remember:
   separate from desktop Touch ID enrollment and is not recovery: the passphrase
   remains the perimeter and losing it means data loss.
 
-## Remembered CLI unlock
+## Unattended remembered CLI unlock
 
 ```bash
 kassiber secrets remember-unlock
@@ -52,17 +78,19 @@ kassiber secrets status
 kassiber secrets forget-unlock
 ```
 
-Enrollment verifies the encrypted database before storing anything. The CLI
+Enrollment verifies the encrypted database before storing anything and selects
+explicit `unattended` mode. The CLI
 uses its `Kassiber CLI Database Passphrase` item only after setting
 `cli_remembered_unlock: true` in managed `config/settings.json`; desktop-only
 Touch ID enrollment leaves the marker unset, and `secrets status` does not read
 the desktop item. Kassiber
 accepts only the native keyring backend for macOS, Windows, or Linux Secret
 Service; configured third-party/file backends are treated as unavailable. CLI
-reads are not biometric-gated. If the stored copy is stale, Kassiber
-writes `remembered_unlock_stale` to stderr and falls through to the existing
-prompt or `passphrase_required` behavior. Headless systems should keep using
-`--db-passphrase-fd`. `kassiber secrets status` reports `platform`, `available`,
+reads are not biometric-gated. If the stored copy is stale, Kassiber writes
+`remembered_unlock_stale` to stderr and returns `interaction_required`; it does
+not silently switch modes. Headless systems should use a deliberately selected
+brokered session, or manual `--db-passphrase-fd` when a reusable lease is not
+appropriate. `kassiber secrets status` reports `platform`, `available`,
 `configured`, `cli_enabled`, and a stable `access_policy` under
 `remembered_unlock`. Interpret `access_policy` as the credential-store boundary,
 not as proof that a biometric prompt occurred:
@@ -75,11 +103,12 @@ not as proof that a biometric prompt occurred:
   and session policy.
 - `unsupported` — no supported native remembered-unlock backend is available.
 
-`--machine` implies `--non-interactive`, so passphrase-requiring commands need
-their documented fd/identity/recipient input and return `interaction_required`
-instead of opening a prompt. The one-shot `chat` bootstrap sends a resolved DB
-passphrase only in a private `daemon.unlock` request over the child stdin pipe;
-it never appears in argv, environment variables, stdout, or `--transcript`.
+`--machine` implies `--non-interactive`, so authorization-requiring commands
+return `interaction_required` instead of opening a prompt. The CLI chat
+bootstrap is not broker-routed; in brokered mode it fails before opening the DB.
+In manual or unattended mode, its resolved DB passphrase is sent only in a
+private `daemon.unlock` request over the child stdin pipe; it never appears in
+argv, environment variables, stdout, or `--transcript`.
 
 On upgrades from the former shared `Kassiber Database Passphrase` item, the
 non-secret CLI marker decides ownership conservatively. Successful explicit CLI
@@ -104,6 +133,13 @@ actions changes the SQLCipher passphrase or provides recovery.
 An unsigned/ad-hoc preview refuses to replace an existing protected enrollment,
 and protected-item removal cleans any preview fallback first rather than
 silently leaving another valid desktop copy.
+
+Operator-broker Touch ID is a third, broker-specific namespace and policy. It
+is available only to production-signed macOS app/helper builds and opens a
+broker lease; it does not turn CLI remembered unlock into biometric
+authorization. Windows Hello and Linux biometric/polkit integration are not
+implemented. Password-authorized broker sessions work on macOS, Linux, and
+Windows.
 
 ## First-time encryption
 
@@ -256,16 +292,18 @@ the secret in chat.
 
 ## Reveal: pulling a secret back out of the DB
 
-The daemon refuses to return raw descriptor or token material without a
-fresh passphrase round-trip even if the DB is already unlocked in the
-running process. Each reveal request requires an `auth_response` carrying
-the passphrase; a wrong passphrase produces `local_auth_denied`.
+Secret reveal is admin work. In a brokered CLI session it requires fresh,
+single-operation authorization through the global `--operator-auth-fd FD`
+even though the normal lease is active. Desktop daemon reveal keeps its
+existing `auth_required`/`auth_response` round-trip; a wrong passphrase
+produces `local_auth_denied`.
 
 CLI surfaces:
 
 ```bash
 kassiber backends reveal-token <name>
 kassiber wallets reveal-descriptor <wallet-label> --workspace personal --profile main
+kassiber --operator-auth-fd 3 backends reveal-token <name> 3< /secure/input
 ```
 
 These exist for legitimate recovery and rotation workflows. Do not pipe the
@@ -286,6 +324,12 @@ The whole tar stream is then encrypted by `age` with an outer passphrase
 are independent: the outer age passphrase only protects the bundle in
 transit / at rest off-box; the inner DB passphrase still gates the data
 inside it.
+
+Backup commands are classified as admin. During a brokered session, supply
+fresh DB authorization with global `--operator-auth-fd FD` in addition to the
+backup command's own outer-passphrase/recipient input. `backup import
+--install` is deliberately not brokerable: lock the lease, select manual mode,
+and perform the restore under direct local authorization.
 
 ```bash
 # export with a fresh outer passphrase (interactive prompt)
