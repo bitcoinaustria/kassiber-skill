@@ -128,18 +128,47 @@ live under `<skill-dir>/references/`, not repo-root `references/`.
 
 If a command returns:
 
-- `passphrase_required` — the on-disk database is SQLCipher-encrypted but no
-  passphrase was supplied. Re-run interactively, or pass
-  `--db-passphrase-fd <FD>` from a parent process. There is no
-  `--db-passphrase <value>` flag.
+- `interaction_required` — inspect the hint and `kassiber --machine operator
+  status`. In brokered mode, a human runs `kassiber operator unlock
+  --until-lock` locally. In manual mode, re-run interactively or use
+  `--db-passphrase-fd FD`. Do not silently enroll unattended remembered unlock.
+- `passphrase_required` — a legacy/interactive path found a SQLCipher database
+  without a passphrase. Use the selected mode's authorization path; current
+  machine/non-interactive calls normally report `interaction_required`.
 - `unlock_failed` — the passphrase did not match. Double-check it; if rotated
   recently, the old passphrase no longer works.
 - `remembered_unlock_stale` on stderr — the stored copy no longer opens this
-  database. Re-enroll with `kassiber secrets remember-unlock`; Kassiber still
-  falls through to the normal prompt or `passphrase_required` path.
+  database. In explicit unattended mode, a human must re-enroll with `kassiber
+  secrets remember-unlock` or deliberately return to manual/brokered mode.
+  Kassiber does not silently fall through to another reusable mode.
 - `remembered_unlock_unavailable` — the native credential store is missing,
   locked, or rejected the write. Keep using `--db-passphrase-fd`; Kassiber does
   not create a plaintext fallback.
+- `remembered_unlock_legacy_cleanup_failed` — enrollment could not remove the
+  migration-only shared credential and rolled back a new CLI enrollment when
+  possible. Remove `Kassiber Database Passphrase` in the OS credential manager
+  and retry.
+- Desktop Touch ID reports a stale enrollment after a CLI passphrase rotation —
+  enter the new database passphrase manually and re-enable Touch ID. The CLI
+  intentionally cannot rewrite the biometric-protected desktop item.
+- `operator_scope_required` — brokered work cannot borrow mutable current
+  context. Pass every declared `--workspace` and `--profile` flag explicitly.
+- `operator_chat_not_supported` — CLI chat is not broker-routed. Use direct
+  brokered commands, or have the human lock and select manual mode before chat.
+- `operator_admin_auth_required` — a broker-routed database command needs a
+  fresh passphrase through global `--operator-auth-fd FD`; the standing lease
+  cannot be upgraded. Direct lock/cancel revocation controls do not use it.
+- `operator_policy_binding_required` / `operator_policy_binding_mismatch` — the
+  reusable mode or credential is not authenticated to this current canonical
+  project/database. Re-authorize the intended mode; do not copy settings or
+  credentials from another project.
+- `project_in_use`, `operator_project_busy`, or a desktop/broker ownership
+  error — another long-lived runtime owns the project or cleanup is still in
+  progress. Inspect `operator status`, close/lock the owner, and retry; never
+  start a second daemon against the same database.
+- `operator_submission_result_unknown` or operation state `result_unknown` — a
+  crash or acknowledgement loss prevents Kassiber from proving the mutation's
+  outcome. Reconcile durable domain state before retrying.
 - `plaintext_database` from `kassiber secrets change-passphrase` — the file is
   still plaintext. Run `kassiber secrets init` first.
 - `already_encrypted` from `kassiber secrets init` — the file is already

@@ -5,7 +5,9 @@ Kassiber CLI correctly.
 
 This repository is intentionally small and installable on its own. It focuses
 on CLI navigation: workflow order, safe handling rules, report selection, and
-the places where command syntax is easy to guess wrong.
+the places where command syntax is easy to guess wrong. It also documents the
+terminal-first operator broker used for capability-scoped work sessions against
+SQLCipher-encrypted projects.
 
 ## Contents
 
