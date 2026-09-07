@@ -2,6 +2,11 @@
 
 Use this reference for balances, portfolio views, capital gains, journal exports, PDF export, and exchange-rate sync.
 
+These are Bitcoin tax and portfolio reports. They are not the opt-in general
+ledger's financial statements. For a statutory trial balance, period P&L, or
+cumulative balance sheet, use `accounting reports` and read
+[general-accounting.md](general-accounting.md).
+
 ## Output strategy
 
 Preferred defaults:

@@ -69,8 +69,10 @@ Creating books creates one default wallet/reporting bucket:
 
 - `treasury`
 
-Accounts are not a double-entry chart of accounts today. `fees` and `external`
-are not automatic counterpart destinations.
+These top-level accounts are not the double-entry chart. `fees` and `external`
+are not automatic counterpart destinations. An organization can separately
+enroll an already encrypted book in the opt-in general ledger with `accounting
+configure`; read [general-accounting.md](general-accounting.md) before doing so.
 
 ## Paths
 

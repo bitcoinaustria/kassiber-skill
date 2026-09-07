@@ -24,6 +24,7 @@ This skill bundles a verification helper:
 <skill-dir>/scripts/verify-state.sh --section wallets
 <skill-dir>/scripts/verify-state.sh --project <project-id>
 <skill-dir>/scripts/verify-state.sh --data-root /path/to/project/data
+<skill-dir>/scripts/verify-accounting-contract.sh
 ```
 
 Requirements:
@@ -43,6 +44,11 @@ It checks:
 - wallet count
 - journal entry count
 - quarantine count
+
+`verify-accounting-contract.sh` separately checks the installed Kassiber
+command catalog for the essential double-entry actions, their read/mutation
+classification, explicit scope requirements, and book-independent package
+verification. It reads command metadata only and does not open a book.
 
 The helper never prompts, reads a passphrase, changes unlock mode, or enrolls a
 credential. It first calls public-safe `operator status`, then runs ordinary

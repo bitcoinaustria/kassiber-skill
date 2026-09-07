@@ -1,4 +1,4 @@
 interface:
   display_name: "Kassiber"
-  short_description: "Help with Kassiber CLI accounting workflows"
-  default_prompt: "Use $kassiber to inspect Kassiber state, manage wallets, process journals, or generate reports. Prefer exact CLI rollups over hand calculations."
+  short_description: "Kassiber Bitcoin tax and double-entry workflows"
+  default_prompt: "Use $kassiber to inspect Kassiber state, manage wallets, process tax journals, generate reports, or operate the separate opt-in double-entry ledger. Prefer exact CLI results over hand calculations."

@@ -1,6 +1,6 @@
 ---
 name: kassiber
-description: Use this skill when the user wants to use the Kassiber CLI for local-first Bitcoin accounting, wallet onboarding, transaction imports, journal processing, metadata cleanup, or tax and portfolio reports. Applies to requests about Kassiber books, internal workspaces/profiles, accounts, wallets, backends, rates, attachments, BIP329 labels, quarantines, generic tax reporting, and Austrian accounting/reporting questions, even when the user does not say Kassiber by name.
+description: Use this skill when the user wants to use the Kassiber CLI for local-first Bitcoin accounting, wallet onboarding, transaction imports, journal processing, metadata cleanup, tax and portfolio reports, or the opt-in double-entry general ledger. Applies to requests about Kassiber books, internal workspaces/profiles, wallet buckets, statutory chart accounts, postings, periods, bank reconciliation, close packages, Austrian working papers, and related accounting workflows, even when the user does not say Kassiber by name.
 metadata:
   author: Bitcoin Austria
   repository: https://github.com/bitcoinaustria/kassiber-skill
@@ -12,7 +12,12 @@ Use this skill for Kassiber CLI workflows. Kassiber has its own command surface,
 
 All `scripts/` paths in this skill are relative to the directory containing this `SKILL.md` file. Resolve `<skill-dir>` first, then use paths like `<skill-dir>/scripts/verify-state.sh`.
 
-Kassiber accounts are wallet/reporting buckets, not a double-entry chart of accounts. Keep explanations simple unless the user explicitly asks for accounting theory.
+Keep Kassiber's two accounting domains distinct:
+
+- Existing `accounts`, RP2 `journal_entries`, and top-level `reports` are the Bitcoin wallet/tax subledger. Its accounts remain descriptive wallet/reporting buckets.
+- `accounting ...` is a separate, explicitly enrolled double-entry general ledger with its own chart accounts, periods, postings, financial statements, and close lifecycle.
+
+Never reinterpret wallet buckets or RP2 tax rows as general-ledger accounts or entries.
 
 Kassiber's CLI and daemon output are English and machine-deterministic, independent of any GUI language. The desktop app (`ui-tauri/`) is separately localized (English + Austrian German); the CLI is not. Don't translate CLI/`--machine` output or expect localized CLI responses. If you change UI strings in the Kassiber source repo, see `docs/reference/i18n.md` there.
 
@@ -29,6 +34,10 @@ Use these without opening extra references when the request clearly matches:
 | Inspect the selected project's unlock mode and lease | `kassiber --machine operator status` |
 | Discover an unfamiliar command contract | `kassiber --machine commands describe <command> [subcommand]` |
 | Rebuild stale reports after imports/metadata/rates | `kassiber --machine journals process` |
+| Inspect whether a book supports or enabled the general ledger | `kassiber --machine accounting capabilities --workspace <workspace> --profile <profile>` |
+| Inspect a ledger period's local worklist and blockers | `kassiber --machine accounting workbench --workspace <workspace> --profile <profile> --payload '{"period_id":"<period>"}'` |
+| Read trial balance, period P&L, and cumulative balance sheet | `kassiber --machine accounting reports --workspace <workspace> --profile <profile> --payload '{"period_id":"<period>"}'` |
+| Verify an exported accounting close package | `kassiber --machine accounting verify-package --payload-file <package.json> --payload-sha256 <sha256>` |
 | Largest inbound transactions | `kassiber --machine transactions list --direction inbound --sort amount --order desc --limit 10` |
 | Largest outbound transactions | `kassiber --machine transactions list --direction outbound --sort amount --order desc --limit 10` |
 | Smallest inbound transactions | `kassiber --machine transactions list --direction inbound --sort amount --order asc --limit 10` |
@@ -75,7 +84,7 @@ If a fast-path command returns a structured error, inspect the envelope and take
 30. Never claim a BTC ↔ LBTC swap is already paired, carrying-value, or reflected in reports unless `kassiber --machine journals transfers list` shows the pair or `kassiber transfers pair` just succeeded and you reprocessed journals.
 31. When quarantines remain, distinguish processed holdings from raw transaction-net estimates. Reports show processed journal state only; any netting from `transactions list` must be labeled as an approximate diagnostic rather than a Kassiber holding.
 32. For rate coverage, do not infer the covered time window from `samples` or `days` alone. Use `kassiber rates range` with RFC3339 timestamps around the missing transactions.
-33. Treat Kassiber accounts as wallet/reporting buckets. Do not recommend double-entry charts of accounts, automatic fee expense postings, or external equity counterpart accounts unless the product gains an explicit ledger model.
+33. Treat top-level `accounts` as wallet/reporting buckets, but use `accounting account-create` for the opt-in ledger's chart accounts. Do not mix the two namespaces or answer a statutory-ledger question from the Bitcoin subledger's `reports balance-sheet`.
 34. For planning or codebase work in the Kassiber source repo, treat `TODO.md` as the executable backlog and `docs/plan/` as orientation/guardrails. Verify current behavior against code before acting on a plan doc.
 35. Treat `kassiber operator status` as the authoritative unlock-state check for an encrypted project. `brokered` is the recommended agent-work mode: a human runs `kassiber operator unlock --until-lock` in a controlling terminal, then same-OS-user processes share the capability-scoped in-memory lease. `manual` prompts per process or uses `--db-passphrase-fd`; `unattended` is the separate explicit `kassiber secrets remember-unlock` credential-store mode. Never switch modes or enroll unattended unlock merely to make an agent command succeed, and never ask the agent to see, retain, or place the passphrase in argv.
 36. `kassiber secrets init` is a one-time migration from plaintext to SQLCipher. After it runs, the original plaintext file is preserved as `kassiber.pre-encryption.sqlite3.bak`; Kassiber refuses to overwrite an existing rollback file at that path. Advise the user to verify the encrypted DB opens (`kassiber secrets verify`) and then `rm` the `.bak` themselves once they trust the new file. Forgetting the passphrase means data loss — there is no recovery path and `.kassiber` backups do not help.
@@ -85,6 +94,8 @@ If a fast-path command returns a structured error, inspect the envelope and take
 40. For scripted `kassiber chat` runs, prefer `--allow-tool <daemon-tool-name>` over broad `--yes`. Machine (`--machine`) and `--stream-json` runs never prompt for consent even on a TTY; there, and without a TTY in rendered mode, unapproved mutating tool requests are denied and fed back to the model as `user_denied`.
 41. Chat history persists inside the SQLCipher database under the `auto` policy only when the DB is encrypted (`kassiber chats config --history auto|on|off`). `kassiber chat --continue` resumes the latest session, `--session <id>` a specific one, `--incognito` skips persistence once. Manage stored sessions with `kassiber chats {list,show,delete,clear}`. Machine chat envelopes carry `session_id` (null when nothing persisted).
 42. For local regtest harness work, use `scripts/integration-harness.sh` from the repo root. `fast` is the no-Docker replay lane; `bitcoin-core` starts a disposable Core/Elements/Fulcrum/local-backend Compose stack; `demo-full` builds a throwaway full accounting book and proves the post-sync refresh path; `demo-up` keeps a persistent demo node/book and must leave reports immediately readable; `demo-tick [N]` adds fresh confirmed business activity to that persistent book; `demo-down [--purge]` stops or removes it.
+43. General accounting is explicitly opt-in, CLI/agent-first, and requires an already encrypted and unlocked SQLCipher project. Every book operation requires explicit `--workspace` and `--profile`; prefer `--payload-stdin` for financial JSON. Read [references/general-accounting.md](references/general-accounting.md) before configuring, posting, closing, exporting, or handling accounting evidence.
+44. Do not describe the general ledger as completed production-ready organizational accounting or automatic filing. Treat a period lock, prepared K2/annex working paper, and exported package as separate states; Kassiber does not submit to FinanzOnline.
 
 ## Gotchas
 
@@ -107,13 +118,18 @@ If a fast-path command returns a structured error, inspect the envelope and take
 - Coinbase `rates sync` normally uses missing transaction minutes and cached checked-minute state before falling back to a continuous `--days` warm-cache request. Verify actual coverage with `rates range` instead of hand-mathing sample counts.
 - If a skill reference lookup fails, the most common mistake is resolving `references/...` from repo root instead of `<skill-dir>/references/...`.
 - Kassiber already has `reports export-pdf`; do not invent bespoke render scripts unless the user specifically wants a custom format beyond the built-in export.
-- Accounts are not a double-entry chart of accounts today. `account_type` and `asset` are descriptive bucket metadata; fees and external counterparties do not auto-post to separate accounts.
+- Top-level `accounts` are not the double-entry chart. `account_type` and `asset` remain descriptive bucket metadata; statutory chart accounts live only under the separately enrolled `accounting` command family.
+- `reports balance-sheet` is the Bitcoin holdings view. `accounting reports` returns the general ledger's trial balance, period P&L, and cumulative balance sheet.
 
 ## Data Model
 
 Kassiber organizes data as:
 
-`books set -> book -> buckets + wallets -> transactions -> journals -> reports`
+`books set -> book -> buckets + wallets -> transactions -> tax journals -> tax/portfolio reports`
+
+An encrypted book may additionally enroll the separate organizational path:
+
+`book -> accounting configuration -> chart + periods -> drafts -> posted entries -> financial reports -> close package`
 
 Related notes:
 
@@ -123,6 +139,7 @@ Related notes:
   is `profile`.
 - `wallet` is a transaction source that Kassiber syncs or imports; map it to the real underlying wallet, not every external store or export.
 - `account` is a wallet/reporting bucket that wallets can belong to.
+- `accounting account-create` creates a statutory chart account inside the separate general ledger; it does not create or change a wallet bucket.
 - `backends` define sync transport endpoints.
 - `metadata` covers notes, tags, exclusions, and BIP329 labels.
 - `attachments` are managed separately from wallet config and transaction rows.
@@ -139,6 +156,7 @@ Related notes:
 - For swap-candidate matching (Lightning ↔ Liquid, BTC ↔ LBTC peg, Boltz submarine swaps), the auto-pair rules engine, and saved review-queue views, read [references/swap-matching.md](references/swap-matching.md).
 - For notes, tags, exclusions, BIP329 labels, and attachments, read [references/metadata.md](references/metadata.md).
 - For balance sheet, portfolio, capital gains, balance history, PDF export, and rates, read [references/reports.md](references/reports.md).
+- For double-entry configuration, chart accounts, periods, postings, bank/evidence reconciliation, source projections, financial statements, close/reopen, packages, and Austrian working papers, read [references/general-accounting.md](references/general-accounting.md).
 - For quick state checks and smoke validation, read [references/verification.md](references/verification.md) and use `scripts/verify-state.sh` when helpful.
 - For common failure modes and path confusion, read [references/troubleshooting.md](references/troubleshooting.md).
 - For terminal unlock modes, lease capabilities, queued-operation status, fresh admin authorization, and safe agent handoff, read [references/operator-broker.md](references/operator-broker.md).
@@ -158,6 +176,7 @@ Related notes:
 | Balance changes over time, trends, history | `balance-history` |
 | Raw journal export, journal rows, bookkeeping output | `journal-entries` |
 | Exact rollups: fees, counts, totals, realized/unrealized summary | `summary` |
+| General-ledger trial balance, period P&L, and cumulative balance sheet | `accounting reports` with a `period_id` payload |
 
 ## Fallback
 

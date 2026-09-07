@@ -124,6 +124,33 @@ kassiber --machine health
 kassiber --machine next-actions
 ```
 
+## Double-entry accounting
+
+The general ledger is separate from wallet buckets, RP2 tax journals, and
+top-level `reports`. Every book-scoped accounting command requires explicit
+scope. Financial inputs are JSON; prefer stdin so they do not enter shell
+history:
+
+```bash
+printf '%s' '{"period_id":"2025"}' | kassiber --machine accounting workbench \
+  --workspace <workspace> --profile <profile> --payload-stdin
+
+printf '%s' '{"period_id":"2025"}' | kassiber --machine accounting reports \
+  --workspace <workspace> --profile <profile> --payload-stdin
+```
+
+For larger approved inputs, bind the exact file bytes:
+
+```bash
+kassiber --machine accounting <action> \
+  --workspace <workspace> --profile <profile> \
+  --payload-file /absolute/path/input.json --payload-sha256 <lowercase-sha256>
+```
+
+`accounting verify-package` is book-independent, so it takes no workspace or
+profile. Read [general-accounting.md](general-accounting.md) before any ledger
+mutation; do not guess action payloads from these abbreviated templates.
+
 ## Backends
 
 ```bash

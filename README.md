@@ -13,6 +13,7 @@ SQLCipher-encrypted projects.
 
 - `SKILL.md` - top-level routing, rules, fast paths, and gotchas
 - `references/` - focused CLI command and workflow references
+- `references/general-accounting.md` - opt-in double-entry ledger workflow and safety boundaries
 - `scripts/` - small helpers used by the skill
 - `agents/` - agent-specific metadata
 

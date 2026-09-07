@@ -208,7 +208,7 @@ add_attention() {
 
 run_operator_preflight() {
   local output
-  if ! run_kassiber_captured "${GLOBAL_ARGS[@]}" --machine operator status; then
+  if ! run_kassiber_captured ${GLOBAL_ARGS[@]+"${GLOBAL_ARGS[@]}"} --machine operator status; then
     if jq -e '.kind == "error"' >/dev/null 2>&1 <<<"$command_stdout"; then
       printf '%s\n' "$command_stdout"
       return 1
@@ -288,7 +288,7 @@ run_operator_preflight() {
 
 run_status() {
   local details
-  if run_kassiber_captured "${GLOBAL_ARGS[@]}" --machine status; then
+  if run_kassiber_captured ${GLOBAL_ARGS[@]+"${GLOBAL_ARGS[@]}"} --machine status; then
     if jq -e '
       .kind == "status" and
       .schema_version == 1 and
